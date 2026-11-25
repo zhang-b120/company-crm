@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.workbench.mapper.CsWorkOrderOverviewMapper">
+
+    <!-- 仅"当前持有人(当前处理人)属于客服部"的工单（口径修正 2026-06-21：去掉 owner_user 创建人支） -->
+    <sql id="ownerIn">
+        AND w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+    </sql>
+
+    <!-- 按创建月份过滤（CSWO-05）：传 month 时 createStart=当月1号、createEnd=次月1号；不传则该片段为空、结果与现状一致 -->
+    <sql id="createWindow">
+        <if test="createStart != null">
+            AND w.create_time &gt;= #{createStart} AND w.create_time &lt; #{createEnd}
+        </if>
+    </sql>
+
+    <!-- 按客服人员状态分布 + 本月完成 + 超时 + 停滞（范式同 CsWorkbenchMapper.bookkeepingStatsByMember） -->
+    <select id="overviewByMember" resultType="java.util.Map">
+        SELECT
+            w.current_owner_user AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE WHEN w.status = 'PENDING'         THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN w.status = 'RUNNING'         THEN 1 ELSE 0 END) AS running,
+            SUM(CASE WHEN w.status = 'WAITING_CHILD'   THEN 1 ELSE 0 END) AS waiting_child,
+            SUM(CASE WHEN w.status = 'SUSPENDED'       THEN 1 ELSE 0 END) AS suspended,
+            SUM(CASE WHEN w.status = 'CONCESSION_DONE' THEN 1 ELSE 0 END) AS concession_done,
+            SUM(CASE WHEN w.status = 'WAITING_FIX'     THEN 1 ELSE 0 END) AS waiting_fix,
+            SUM(CASE WHEN w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE') THEN 1 ELSE 0 END) AS active_count,
+            <choose>
+                <!-- 选了月份：本片已被 createWindow 限定为该月新建工单，month_done = 其中已完成（DONE）数 -->
+                <when test="createStart != null">
+                    SUM(CASE WHEN w.status = 'DONE' THEN 1 ELSE 0 END) AS month_done,
+                </when>
+                <!-- 未选月份：维持原"本月完成"= complete_time ∈ [monthStart, monthEnd) -->
+                <otherwise>
+                    SUM(CASE WHEN w.status = 'DONE' AND w.complete_time IS NOT NULL
+                            AND w.complete_time &gt;= #{monthStart} AND w.complete_time &lt; #{monthEnd}
+                        THEN 1 ELSE 0 END) AS month_done,
+                </otherwise>
+            </choose>
+            SUM(CASE WHEN w.status = 'PENDING' AND w.due_time IS NOT NULL AND w.due_time &lt; #{now}
+                THEN 1 ELSE 0 END) AS overdue_pending,
+            SUM(CASE WHEN w.status = 'RUNNING' AND w.due_time IS NOT NULL AND w.due_time &lt; #{now}
+                THEN 1 ELSE 0 END) AS overdue_running,
+            SUM(CASE WHEN w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE')
+                    AND w.update_time &lt; NOW() - INTERVAL #{staleDays} DAY
+                THEN 1 ELSE 0 END) AS stale_count
+        FROM work_order w
+        LEFT JOIN sys_user u ON u.username = w.current_owner_user AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE w.deleted = 0 AND w.tenant_id = #{tenantId}
+        <if test="taskType != null and taskType != ''">
+            AND w.task_type = #{taskType}
+        </if>
+        <include refid="ownerIn"/>
+        <include refid="createWindow"/>
+        GROUP BY w.current_owner_user
+    </select>
+
+    <!-- 指定状态超时明细：due_time < now，按到期升序 limit -->
+    <select id="overdueDetail" resultType="java.util.Map">
+        SELECT
+            w.id              AS id,
+            w.task_no         AS task_no,
+            w.title           AS title,
+            w.current_owner_user AS current_owner_user,
+            w.current_owner_name AS current_owner_name,
+            w.due_time        AS due_time,
+            DATEDIFF(#{now}, w.due_time) AS overdue_days
+        FROM work_order w
+        WHERE w.deleted = 0 AND w.tenant_id = #{tenantId}
+          AND w.status = #{status}
+          AND w.due_time IS NOT NULL AND w.due_time &lt; #{now}
+        <if test="taskType != null and taskType != ''">
+            AND w.task_type = #{taskType}
+        </if>
+        <include refid="ownerIn"/>
+        <include refid="createWindow"/>
+        ORDER BY w.due_time ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 挂起原因汇总 -->
+    <select id="suspendReasonSummary" resultType="java.util.Map">
+        SELECT
+            w.suspend_reason AS reason,
+            COUNT(*)         AS cnt
+        FROM work_order w
+        WHERE w.deleted = 0 AND w.tenant_id = #{tenantId}
+          AND w.status = 'SUSPENDED'
+        <if test="taskType != null and taskType != ''">
+            AND w.task_type = #{taskType}
+        </if>
+        <include refid="ownerIn"/>
+        <include refid="createWindow"/>
+        GROUP BY w.suspend_reason
+        ORDER BY cnt DESC
+    </select>
+
+    <!-- 挂起单明细：planned_resume_time < now 标记 resume_overdue=1，前端置顶标红 -->
+    <select id="suspendDetail" resultType="java.util.Map">
+        SELECT
+            w.id              AS id,
+            w.task_no         AS task_no,
+            w.title           AS title,
+            w.current_owner_user AS current_owner_user,
+            w.current_owner_name AS current_owner_name,
+            w.suspend_reason  AS suspend_reason,
+            w.suspend_remark  AS suspend_remark,
+            w.planned_resume_time AS planned_resume_time,
+            CASE WHEN w.planned_resume_time IS NOT NULL AND w.planned_resume_time &lt; #{now} THEN 1 ELSE 0 END AS resume_overdue
+        FROM work_order w
+        WHERE w.deleted = 0 AND w.tenant_id = #{tenantId}
+          AND w.status = 'SUSPENDED'
+        <if test="taskType != null and taskType != ''">
+            AND w.task_type = #{taskType}
+        </if>
+        <include refid="ownerIn"/>
+        <include refid="createWindow"/>
+        ORDER BY resume_overdue DESC, w.planned_resume_time ASC
+    </select>
+
+    <!-- 下钻 WHERE：客服部当前持有人 + username(可选) + taskType(可选) + bucket 状态/超时/停滞条件 -->
+    <sql id="drillWhere">
+        WHERE w.deleted = 0 AND w.tenant_id = #{tenantId}
+        <include refid="ownerIn"/>
+        <if test="username != null and username != ''">
+            AND w.current_owner_user = #{username}
+        </if>
+        <if test="taskType != null and taskType != ''">
+            AND w.task_type = #{taskType}
+        </if>
+        <include refid="createWindow"/>
+        <choose>
+            <when test="bucket == 'active'">
+                AND w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE')
+            </when>
+            <when test="bucket == 'pending'">AND w.status = 'PENDING'</when>
+            <when test="bucket == 'running'">AND w.status = 'RUNNING'</when>
+            <when test="bucket == 'waitingChild'">AND w.status = 'WAITING_CHILD'</when>
+            <when test="bucket == 'suspended'">AND w.status = 'SUSPENDED'</when>
+            <when test="bucket == 'concessionDone'">AND w.status = 'CONCESSION_DONE'</when>
+            <when test="bucket == 'waitingFix'">AND w.status = 'WAITING_FIX'</when>
+            <when test="bucket == 'overduePending'">
+                AND w.status = 'PENDING' AND w.due_time IS NOT NULL AND w.due_time &lt; #{now}
+            </when>
+            <when test="bucket == 'overdueRunning'">
+                AND w.status = 'RUNNING' AND w.due_time IS NOT NULL AND w.due_time &lt; #{now}
+            </when>
+            <when test="bucket == 'monthDone'">
+                <choose>
+                    <!-- 选了月份：createWindow 已限定该月新建，monthDone = 其中 DONE -->
+                    <when test="createStart != null">AND w.status = 'DONE'</when>
+                    <otherwise>
+                        AND w.status = 'DONE' AND w.complete_time IS NOT NULL
+                        AND w.complete_time &gt;= #{monthStart} AND w.complete_time &lt; #{monthEnd}
+                    </otherwise>
+                </choose>
+            </when>
+            <when test="bucket == 'stale'">
+                AND w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE')
+                AND w.update_time &lt; NOW() - INTERVAL #{staleDays} DAY
+            </when>
+            <otherwise>
+                AND w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE')
+            </otherwise>
+        </choose>
+    </sql>
+
+    <select id="drillList" resultType="java.util.Map">
+        SELECT
+            w.id              AS id,
+            w.task_no         AS task_no,
+            w.task_type       AS task_type,
+            w.title           AS title,
+            w.current_owner_user AS current_owner_user,
+            w.current_owner_name AS current_owner_name,
+            w.status          AS status,
+            w.due_time        AS due_time,
+            w.create_time     AS create_time,
+            w.company_id      AS company_id,
+            w.customer_id     AS customer_id
+        FROM work_order w
+        <include refid="drillWhere"/>
+        ORDER BY w.create_time DESC
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="drillCount" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM work_order w
+        <include refid="drillWhere"/>
+    </select>
+
+</mapper>

@@ -1,0 +1,525 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.workbench.mapper.CsLeaderMapper">
+
+    <!-- A1 任务积压堆叠（每人按 task_type 数） -->
+    <select id="backlogByMember" resultType="java.util.Map">
+        SELECT
+            COALESCE(w.current_owner_user, w.owner_user) AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE WHEN w.task_type='BOOKKEEPING' THEN 1 ELSE 0 END) AS bookkeeping,
+            SUM(CASE WHEN w.task_type='RENEWAL' THEN 1 ELSE 0 END) AS renewal,
+            SUM(CASE WHEN w.task_type='FIELD_WORK' THEN 1 ELSE 0 END) AS fieldwork,
+            SUM(CASE WHEN w.task_type='DATA_COLLECTION' THEN 1 ELSE 0 END) AS data_collection,
+            COUNT(*) AS total
+        FROM work_order w
+        LEFT JOIN sys_user u ON u.username=COALESCE(w.current_owner_user, w.owner_user)
+            AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+          AND w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED')
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user。
+               避免「同事原创但流转给团队外人员处理」时把外部门人员误聚合到本团队。 -->
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (w.current_owner_user IS NULL AND w.owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+        GROUP BY COALESCE(w.current_owner_user, w.owner_user)
+        ORDER BY total DESC
+    </select>
+
+    <!--
+      A2 超期未办按管家
+      注：DATEDIFF 仅用于聚合 max_days，不在 WHERE，索引仍可用
+      due_time < now 是范围条件 → 命中 idx_wb_wo_due (due_time, status)
+    -->
+    <select id="overdueByMember" resultType="java.util.Map">
+        SELECT
+            COALESCE(w.current_owner_user, w.owner_user) AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(*) AS overdue_count,
+            MAX(DATEDIFF(#{now}, w.due_time)) AS max_days
+        FROM work_order w
+        LEFT JOIN sys_user u ON u.username=COALESCE(w.current_owner_user, w.owner_user)
+            AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+          AND w.due_time IS NOT NULL AND w.due_time &lt; #{now}
+          AND w.status NOT IN ('DONE','CANCELED')
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user。
+               避免「同事原创但流转给团队外人员处理」时把外部门人员误聚合到本团队。 -->
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (w.current_owner_user IS NULL AND w.owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+        GROUP BY COALESCE(w.current_owner_user, w.owner_user) ORDER BY overdue_count DESC
+    </select>
+
+    <!-- A2 超期 TOP 5 -->
+    <select id="overdueTop5" resultType="java.util.Map">
+        SELECT
+            w.id AS work_order_id,
+            w.task_no AS task_no,
+            w.title AS title,
+            w.task_type AS task_type,
+            COALESCE(w.current_owner_name, w.owner_user_name) AS owner_name,
+            DATEDIFF(#{now}, w.due_time) AS overdue_days
+        FROM work_order w
+        WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+          AND w.due_time IS NOT NULL AND w.due_time &lt; #{now}
+          AND w.status NOT IN ('DONE','CANCELED')
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user。
+               避免「同事原创但流转给团队外人员处理」时把外部门人员误聚合到本团队。 -->
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (w.current_owner_user IS NULL AND w.owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+        ORDER BY overdue_days DESC
+        LIMIT 5
+    </select>
+
+    <!-- A3 超 3 / 7 天未动；CASE 用范围比较 -->
+    <select id="staleByMember" resultType="java.util.Map">
+        SELECT
+            COALESCE(w.current_owner_user, w.owner_user) AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE WHEN w.update_time &gt;= NOW() - INTERVAL 6 DAY
+                      AND w.update_time &lt;  NOW() - INTERVAL 2 DAY THEN 1 ELSE 0 END) AS count3,
+            SUM(CASE WHEN w.update_time &lt;  NOW() - INTERVAL 6 DAY THEN 1 ELSE 0 END) AS count7
+        FROM work_order w
+        LEFT JOIN sys_user u ON u.username=COALESCE(w.current_owner_user, w.owner_user)
+            AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+          AND w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED')
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user。
+               避免「同事原创但流转给团队外人员处理」时把外部门人员误聚合到本团队。 -->
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (w.current_owner_user IS NULL AND w.owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+        GROUP BY COALESCE(w.current_owner_user, w.owner_user)
+        HAVING (count3+count7) &gt; 0
+        ORDER BY count7 DESC
+    </select>
+
+    <!--
+      A4 到期续费（旧实现已删除：基于 work_order 的 upcomingRenewalByMember）
+      A4 到期续费：基于 company_service 表（代账业务）
+      - 业务筛选：sys_business.business_name IN ('代账报税-正式', '代账报税-体验')（与 CsProfileMapper 一致）
+      - 状态：ACTIVE（CANCELLED 视为已停服，不再考虑续费）
+      - 总数：end_date ∈ [今天, 今天 + 2 月)
+      - 分桶：1 月内 / 1-2 月 / 2-3 月
+    -->
+    <select id="expiringRenewalAgg" resultType="java.util.Map">
+        SELECT
+            SUM(CASE WHEN cs.end_date &gt;= #{today} AND cs.end_date &lt; #{plus1m} THEN 1 ELSE 0 END) AS bucket1m,
+            SUM(CASE WHEN cs.end_date &gt;= #{plus1m} AND cs.end_date &lt; #{plus2m} THEN 1 ELSE 0 END) AS bucket2m,
+            SUM(CASE WHEN cs.end_date &gt;= #{plus2m} AND cs.end_date &lt; #{plus3m} THEN 1 ELSE 0 END) AS bucket3m,
+            SUM(CASE WHEN cs.end_date &gt;= #{today} AND cs.end_date &lt; #{plus2m} THEN 1 ELSE 0 END) AS within2m,
+            SUM(CASE WHEN cs.end_date &gt;= #{today} AND cs.end_date &lt; #{plus3m} THEN 1 ELSE 0 END) AS within3m
+        FROM company_service cs
+        JOIN sys_business sb ON sb.id = cs.business_id AND sb.deleted = 0
+        WHERE cs.deleted = 0
+          AND (cs.status IS NULL OR cs.status = 'ACTIVE')
+          AND sb.business_name IN ('代账报税-正式', '代账报税-体验')
+          AND cs.end_date IS NOT NULL
+          AND cs.butler_owner_user IN <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+    </select>
+
+    <!-- A4 按管家分组 -->
+    <select id="expiringRenewalByMember" resultType="java.util.Map">
+        SELECT
+            cs.butler_owner_user AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE WHEN cs.end_date &gt;= #{today} AND cs.end_date &lt; #{plus1m} THEN 1 ELSE 0 END) AS bucket1m,
+            SUM(CASE WHEN cs.end_date &gt;= #{plus1m} AND cs.end_date &lt; #{plus2m} THEN 1 ELSE 0 END) AS bucket2m,
+            SUM(CASE WHEN cs.end_date &gt;= #{plus2m} AND cs.end_date &lt; #{plus3m} THEN 1 ELSE 0 END) AS bucket3m,
+            SUM(CASE WHEN cs.end_date &gt;= #{today} AND cs.end_date &lt; #{plus2m} THEN 1 ELSE 0 END) AS within2m,
+            SUM(CASE WHEN cs.end_date &gt;= #{today} AND cs.end_date &lt; #{plus3m} THEN 1 ELSE 0 END) AS within3m
+        FROM company_service cs
+        JOIN sys_business sb ON sb.id = cs.business_id AND sb.deleted = 0
+        LEFT JOIN sys_user u ON u.username = cs.butler_owner_user AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE cs.deleted = 0
+          AND (cs.status IS NULL OR cs.status = 'ACTIVE')
+          AND sb.business_name IN ('代账报税-正式', '代账报税-体验')
+          AND cs.end_date IS NOT NULL
+          AND cs.end_date &gt;= #{today} AND cs.end_date &lt; #{plus3m}
+          AND cs.butler_owner_user IN <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+        GROUP BY cs.butler_owner_user
+        HAVING within3m &gt; 0
+        ORDER BY within2m DESC, bucket1m DESC
+    </select>
+
+    <!-- A5 数据收集按管家 -->
+    <select id="dataCollectionByMember" resultType="java.util.Map">
+        SELECT
+            cs.butler_owner_user AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(DISTINCT cs.company_id) AS total_companies,
+            COUNT(DISTINCT CASE WHEN bsu.id IS NOT NULL THEN cs.company_id END) AS done_companies,
+            ROUND(COUNT(DISTINCT CASE WHEN bsu.id IS NOT NULL THEN cs.company_id END) * 100.0
+                  / NULLIF(COUNT(DISTINCT cs.company_id), 0), 2) AS rate
+        FROM company_service cs
+        LEFT JOIN company_bank_statement_upload bsu
+          ON bsu.company_id=cs.company_id AND bsu.period=#{period}
+          AND (COALESCE(bsu.upload_count,0) &gt; 0 OR COALESCE(bsu.no_statement,0)=1)
+        LEFT JOIN sys_user u ON u.username=cs.butler_owner_user AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE cs.deleted=0
+          AND cs.butler_owner_user IN
+          <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+        GROUP BY cs.butler_owner_user
+        HAVING total_companies &gt; 0
+        ORDER BY rate DESC
+    </select>
+
+    <!-- A6 管家工作负载 -->
+    <select id="memberLoad" resultType="java.util.Map">
+        SELECT
+            COALESCE(w.current_owner_user, w.owner_user) AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(*) AS active_count
+        FROM work_order w
+        LEFT JOIN sys_user u ON u.username=COALESCE(w.current_owner_user, w.owner_user)
+            AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+          AND w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED')
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user。
+               避免「同事原创但流转给团队外人员处理」时把外部门人员误聚合到本团队。 -->
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (w.current_owner_user IS NULL AND w.owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+        GROUP BY COALESCE(w.current_owner_user, w.owner_user)
+        ORDER BY active_count DESC
+    </select>
+
+    <!-- 按 usernames 查 sys_user 全部成员（含没有 work_order 的人）-->
+    <select id="listMembersByUsernames" resultType="java.util.Map">
+        SELECT username, real_name
+        FROM sys_user
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND username IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        ORDER BY real_name, username
+    </select>
+
+    <!-- A7 任务停留时间：CASE 用范围比较替代 TIMESTAMPDIFF 列函数 -->
+    <select id="stageHoldTimes" resultType="java.util.Map">
+        SELECT
+            w.status AS stage,
+            ROUND(AVG(TIMESTAMPDIFF(HOUR, w.update_time, NOW())), 1) AS avg_hours,
+            SUM(CASE WHEN w.update_time &lt;= NOW() - INTERVAL 72 HOUR THEN 1 ELSE 0 END) AS long_tail_count
+        FROM work_order w
+        WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+          AND w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED')
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user。
+               避免「同事原创但流转给团队外人员处理」时把外部门人员误聚合到本团队。 -->
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (w.current_owner_user IS NULL AND w.owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+        GROUP BY w.status
+    </select>
+
+    <!-- A8 续费失败原因（按团队管辖客户过滤：JOIN company_service） -->
+    <select id="notRenewReasons" resultType="java.util.Map">
+        SELECT
+            COALESCE(r.renew_reason, '未填写') AS name,
+            COUNT(*) AS value
+        FROM company_service_renew r
+        JOIN company_service cs ON cs.id = r.company_service_id AND cs.deleted = 0
+        WHERE r.deleted=0
+          AND r.renew_type=3
+          AND r.renew_end_date &gt;= DATE(#{start})
+          AND r.renew_end_date &lt; DATE(#{end})
+          AND cs.butler_owner_user IN
+          <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+        GROUP BY r.renew_reason
+        ORDER BY value DESC
+        LIMIT 10
+    </select>
+
+    <!-- A9 任务驳回率 -->
+    <select id="rejectByMember" resultType="java.util.Map">
+        SELECT
+            s.owner_user AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(*) AS total_steps,
+            SUM(CASE WHEN s.status='REJECTED' THEN 1 ELSE 0 END) AS rejected_count,
+            ROUND(SUM(CASE WHEN s.status='REJECTED' THEN 1 ELSE 0 END) * 100.0
+                  / NULLIF(COUNT(*),0), 2) AS reject_rate
+        FROM work_order_step s
+        LEFT JOIN sys_user u ON u.username=s.owner_user AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE s.tenant_id=#{tenantId}
+          AND s.update_time &gt;= #{start} AND s.update_time &lt; #{end}
+          AND s.owner_user IN
+          <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+        GROUP BY s.owner_user
+        HAVING total_steps &gt; 0
+        ORDER BY reject_rate DESC
+    </select>
+
+    <!-- B1 续费金额按管家（current/prev/yoy 同时） -->
+    <select id="renewByMember" resultType="java.util.Map">
+        SELECT t.username,
+               u.real_name AS real_name,
+               t.curr_amt AS current,
+               t.prev_amt AS previous,
+               t.yoy_amt AS yoy
+        FROM (
+          SELECT COALESCE(w.current_owner_user, w.owner_user) AS username,
+                 SUM(CASE WHEN w.complete_time &gt;= #{currStart} AND w.complete_time &lt; #{currEnd}
+                          THEN COALESCE(o.final_amount,0) ELSE 0 END) AS curr_amt,
+                 SUM(CASE WHEN w.complete_time &gt;= #{prevStart} AND w.complete_time &lt; #{prevEnd}
+                          THEN COALESCE(o.final_amount,0) ELSE 0 END) AS prev_amt,
+                 SUM(CASE WHEN w.complete_time &gt;= #{yoyStart} AND w.complete_time &lt; #{yoyEnd}
+                          THEN COALESCE(o.final_amount,0) ELSE 0 END) AS yoy_amt
+          FROM work_order w
+          LEFT JOIN orders o ON o.id=w.order_id AND o.tenant_id=#{tenantId} AND o.status='PAID'
+          WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+            AND w.task_type='RENEWAL' AND w.status='DONE' AND w.complete_time IS NOT NULL
+            <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user -->
+            AND (w.current_owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+              OR (w.current_owner_user IS NULL AND w.owner_user IN
+                <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+          GROUP BY COALESCE(w.current_owner_user, w.owner_user)
+        ) t
+        LEFT JOIN sys_user u ON u.username=t.username AND u.tenant_id=#{tenantId} AND u.deleted=0
+    </select>
+
+    <select id="teamRenewAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(o.final_amount), 0)
+        FROM work_order w
+        JOIN orders o ON o.id=w.order_id AND o.tenant_id=#{tenantId} AND o.status='PAID'
+        WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+          AND w.task_type='RENEWAL' AND w.status='DONE' AND w.complete_time IS NOT NULL
+          AND w.complete_time &gt;= #{start} AND w.complete_time &lt; #{end}
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user。
+               避免「同事原创但流转给团队外人员处理」时把外部门人员误聚合到本团队。 -->
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (w.current_owner_user IS NULL AND w.owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+    </select>
+
+    <select id="teamRenewRate" resultType="java.util.Map">
+        SELECT
+            SUM(CASE WHEN status='DONE' THEN 1 ELSE 0 END) AS done_count,
+            COUNT(*) AS total_count,
+            ROUND(SUM(CASE WHEN status='DONE' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*),0), 2) AS rate
+        FROM work_order
+        WHERE deleted=0 AND tenant_id=#{tenantId}
+          AND task_type='RENEWAL'
+          AND due_time IS NOT NULL
+          AND due_time &gt;= #{start} AND due_time &lt; #{end}
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user -->
+          AND (current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (current_owner_user IS NULL AND owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+    </select>
+
+    <select id="renewRateByMember" resultType="java.util.Map">
+        SELECT t.username, u.real_name AS real_name,
+               t.curr_rate AS current, t.prev_rate AS previous
+        FROM (
+          SELECT COALESCE(w.current_owner_user, w.owner_user) AS username,
+            ROUND(SUM(CASE WHEN w.status='DONE' AND w.complete_time &gt;= #{currStart} AND w.complete_time &lt; #{currEnd} THEN 1 ELSE 0 END) * 100.0
+                  / NULLIF(SUM(CASE WHEN w.due_time &gt;= #{currStart} AND w.due_time &lt; #{currEnd} THEN 1 ELSE 0 END), 0), 2) AS curr_rate,
+            ROUND(SUM(CASE WHEN w.status='DONE' AND w.complete_time &gt;= #{prevStart} AND w.complete_time &lt; #{prevEnd} THEN 1 ELSE 0 END) * 100.0
+                  / NULLIF(SUM(CASE WHEN w.due_time &gt;= #{prevStart} AND w.due_time &lt; #{prevEnd} THEN 1 ELSE 0 END), 0), 2) AS prev_rate
+          FROM work_order w
+          WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+            AND w.task_type='RENEWAL'
+            <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user -->
+            AND (w.current_owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+              OR (w.current_owner_user IS NULL AND w.owner_user IN
+                <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+          GROUP BY COALESCE(w.current_owner_user, w.owner_user)
+        ) t
+        LEFT JOIN sys_user u ON u.username=t.username AND u.tenant_id=#{tenantId} AND u.deleted=0
+    </select>
+
+    <select id="teamRenewMonthly" resultType="java.util.Map">
+        SELECT DATE_FORMAT(w.complete_time,'%Y-%m') AS month,
+               COALESCE(SUM(o.final_amount),0) AS amount
+        FROM work_order w
+        JOIN orders o ON o.id=w.order_id AND o.tenant_id=#{tenantId} AND o.status='PAID'
+        WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+          AND w.task_type='RENEWAL' AND w.status='DONE'
+          AND w.complete_time &gt;= #{start} AND w.complete_time &lt; #{end}
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user。
+               避免「同事原创但流转给团队外人员处理」时把外部门人员误聚合到本团队。 -->
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (w.current_owner_user IS NULL AND w.owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+        GROUP BY month ORDER BY month
+    </select>
+
+    <select id="memberRenewMonthly" resultType="java.util.Map">
+        SELECT
+            COALESCE(w.current_owner_user, w.owner_user) AS username,
+            MAX(u.real_name) AS real_name,
+            DATE_FORMAT(w.complete_time,'%Y-%m') AS month,
+            COALESCE(SUM(o.final_amount),0) AS amount
+        FROM work_order w
+        JOIN orders o ON o.id=w.order_id AND o.tenant_id=#{tenantId} AND o.status='PAID'
+        LEFT JOIN sys_user u ON u.username=COALESCE(w.current_owner_user, w.owner_user)
+            AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+          AND w.task_type='RENEWAL' AND w.status='DONE'
+          AND w.complete_time &gt;= #{start} AND w.complete_time &lt; #{end}
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user。
+               避免「同事原创但流转给团队外人员处理」时把外部门人员误聚合到本团队。 -->
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (w.current_owner_user IS NULL AND w.owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+        GROUP BY COALESCE(w.current_owner_user, w.owner_user), month ORDER BY username, month
+    </select>
+
+    <!-- 完成率排行：分母 = 本月新增任务（create_time 在本月），分子 = 本月已完成（避免历史长尾稀释） -->
+    <select id="completionRanking" resultType="java.util.Map">
+        SELECT
+            COALESCE(w.current_owner_user, w.owner_user) AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE WHEN w.status='DONE' AND w.complete_time &gt;= #{start} AND w.complete_time &lt; #{end} THEN 1 ELSE 0 END) AS done_count,
+            SUM(CASE WHEN w.create_time &gt;= #{start} AND w.create_time &lt; #{end} THEN 1 ELSE 0 END) AS total_count,
+            ROUND(SUM(CASE WHEN w.status='DONE' AND w.complete_time &gt;= #{start} AND w.complete_time &lt; #{end} THEN 1 ELSE 0 END) * 100.0
+                  / NULLIF(SUM(CASE WHEN w.create_time &gt;= #{start} AND w.create_time &lt; #{end} THEN 1 ELSE 0 END), 0), 2) AS rate
+        FROM work_order w
+        LEFT JOIN sys_user u ON u.username=COALESCE(w.current_owner_user, w.owner_user)
+            AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+          AND w.status NOT IN ('CANCELED','DRAFT')
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user。
+               避免「同事原创但流转给团队外人员处理」时把外部门人员误聚合到本团队。 -->
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (w.current_owner_user IS NULL AND w.owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+        GROUP BY COALESCE(w.current_owner_user, w.owner_user)
+        HAVING total_count &gt; 0
+        ORDER BY rate DESC, done_count DESC
+        LIMIT 20
+    </select>
+
+    <select id="teamAvgHourMonthly" resultType="java.util.Map">
+        SELECT DATE_FORMAT(complete_time,'%Y-%m') AS month,
+               ROUND(AVG(TIMESTAMPDIFF(MINUTE, create_time, complete_time)) / 60.0, 2) AS amount
+        FROM work_order
+        WHERE deleted=0 AND tenant_id=#{tenantId}
+          AND status='DONE' AND complete_time IS NOT NULL AND create_time IS NOT NULL
+          AND complete_time &gt;= #{start} AND complete_time &lt; #{end}
+          <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user -->
+          AND (current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR (current_owner_user IS NULL AND owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+        GROUP BY month ORDER BY month
+    </select>
+
+    <select id="dcRateSeries" resultType="java.util.Map">
+        SELECT bsu.period AS month,
+               ROUND(COUNT(DISTINCT CASE WHEN bsu.id IS NOT NULL THEN cs.company_id END) * 100.0
+                     / NULLIF(COUNT(DISTINCT cs.company_id), 0), 2) AS amount
+        FROM company_service cs
+        LEFT JOIN company_bank_statement_upload bsu
+            ON bsu.company_id=cs.company_id
+            AND bsu.period IN <foreach collection="periods" item="p" open="(" separator="," close=")">#{p}</foreach>
+            AND (COALESCE(bsu.upload_count,0) &gt; 0 OR COALESCE(bsu.no_statement,0)=1)
+        WHERE cs.deleted=0
+          AND cs.butler_owner_user IN
+          <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+        GROUP BY bsu.period ORDER BY bsu.period
+    </select>
+
+    <select id="doneCountCompare" resultType="java.util.Map">
+        SELECT t.username, u.real_name AS real_name,
+               t.curr_count AS curr_count, t.prev_count AS prev_count
+        FROM (
+          SELECT COALESCE(w.current_owner_user, w.owner_user) AS username,
+                 SUM(CASE WHEN w.status='DONE' AND w.complete_time &gt;= #{currStart} AND w.complete_time &lt; #{currEnd} THEN 1 ELSE 0 END) AS curr_count,
+                 SUM(CASE WHEN w.status='DONE' AND w.complete_time &gt;= #{prevStart} AND w.complete_time &lt; #{prevEnd} THEN 1 ELSE 0 END) AS prev_count
+          FROM work_order w
+          WHERE w.deleted=0 AND w.tenant_id=#{tenantId}
+            <!-- 只算"当前持有人"在团队里的工单：current_owner_user 优先；为 null 时回退看 owner_user -->
+            AND (w.current_owner_user IN
+              <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+              OR (w.current_owner_user IS NULL AND w.owner_user IN
+                <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>))
+          GROUP BY COALESCE(w.current_owner_user, w.owner_user)
+        ) t
+        LEFT JOIN sys_user u ON u.username=t.username AND u.tenant_id=#{tenantId} AND u.deleted=0
+    </select>
+
+
+    <!-- ===== 诊断画像 ===== -->
+
+    <select id="butlerLoadSeries" resultType="java.util.Map">
+        SELECT DATE_FORMAT(create_time,'%Y-%m') AS month,
+               COUNT(*) AS amount
+        FROM work_order
+        WHERE deleted=0 AND tenant_id=#{tenantId}
+          AND (current_owner_user=#{username} OR owner_user=#{username})
+          AND create_time &gt;= #{start} AND create_time &lt; #{end}
+        GROUP BY month ORDER BY month
+    </select>
+
+    <select id="butlerAvgHourSeries" resultType="java.util.Map">
+        SELECT DATE_FORMAT(complete_time,'%Y-%m') AS month,
+               ROUND(AVG(TIMESTAMPDIFF(MINUTE, create_time, complete_time)) / 60.0, 2) AS amount
+        FROM work_order
+        WHERE deleted=0 AND tenant_id=#{tenantId} AND status='DONE'
+          AND (current_owner_user=#{username} OR owner_user=#{username})
+          AND complete_time &gt;= #{start} AND complete_time &lt; #{end}
+        GROUP BY month ORDER BY month
+    </select>
+
+    <select id="butlerRenewRateSeries" resultType="java.util.Map">
+        SELECT DATE_FORMAT(complete_time,'%Y-%m') AS month,
+               ROUND(SUM(CASE WHEN status='DONE' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*),0), 2) AS amount
+        FROM work_order
+        WHERE deleted=0 AND tenant_id=#{tenantId} AND task_type='RENEWAL'
+          AND (current_owner_user=#{username} OR owner_user=#{username})
+          AND complete_time &gt;= #{start} AND complete_time &lt; #{end}
+        GROUP BY month ORDER BY month
+    </select>
+
+    <select id="butlerRejectRate" resultType="java.util.Map">
+        SELECT
+            COUNT(*) AS total_steps,
+            SUM(CASE WHEN status='REJECTED' THEN 1 ELSE 0 END) AS rejected_count,
+            ROUND(SUM(CASE WHEN status='REJECTED' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*),0), 2) AS rate
+        FROM work_order_step
+        WHERE tenant_id=#{tenantId} AND owner_user=#{username}
+          AND update_time &gt;= #{start} AND update_time &lt; #{end}
+    </select>
+
+    <select id="butlerUpcomingRenewal" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted=0 AND tenant_id=#{tenantId} AND task_type='RENEWAL'
+          AND (current_owner_user=#{username} OR owner_user=#{username})
+          AND due_time IS NOT NULL AND due_time &gt;= #{from} AND due_time &lt; #{to}
+    </select>
+
+    <select id="butlerTaskDurations" resultType="java.util.Map">
+        SELECT
+            CASE
+              WHEN TIMESTAMPDIFF(HOUR, create_time, complete_time) &lt; 4 THEN '4 小时内'
+              WHEN TIMESTAMPDIFF(HOUR, create_time, complete_time) &lt; 8 THEN '4-8 小时'
+              WHEN TIMESTAMPDIFF(HOUR, create_time, complete_time) &lt; 24 THEN '8-24 小时'
+              WHEN TIMESTAMPDIFF(HOUR, create_time, complete_time) &lt; 72 THEN '1-3 天'
+              ELSE '3 天以上'
+            END AS bucket,
+            COUNT(*) AS count
+        FROM work_order
+        WHERE deleted=0 AND tenant_id=#{tenantId} AND status='DONE'
+          AND (current_owner_user=#{username} OR owner_user=#{username})
+          AND complete_time &gt;= #{start} AND complete_time &lt; #{end}
+        GROUP BY bucket
+        ORDER BY FIELD(bucket, '4 小时内','4-8 小时','8-24 小时','1-3 天','3 天以上')
+    </select>
+
+</mapper>

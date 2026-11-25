@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.registerAddress.mapper.RegisterAddressMapper">
+
+    <resultMap id="RegisterAddressListResult" type="com.qykj.finmaster.registerAddress.domain.resp.GetRegisterAddressListResp">
+        <id     property="id"            column="id"/>
+        <result property="address"       column="address"/>
+        <result property="status"        column="status"/>
+        <result property="enable"        column="enable"/>
+        <result property="remark"        column="remark"/>
+        <result property="createByName"  column="create_by_name"/>
+        <result property="createTime"    column="create_time"/>
+    </resultMap>
+
+    <sql id="selectRegisterAddressVo">
+        SELECT
+            id,
+            address,
+            status,
+            enable,
+            remark,
+            create_by_name,
+            create_time,
+            tenant_id,
+            deleted
+        FROM register_address
+        WHERE deleted = 0
+    </sql>
+
+    <select id="getRegisterAddressList" resultMap="RegisterAddressListResult">
+        <include refid="selectRegisterAddressVo"/>
+        <if test="params.tenantId != null">
+            AND tenant_id = #{params.tenantId}
+        </if>
+        <if test="params.address != null and params.address != ''">
+            AND address LIKE CONCAT('%', #{params.address}, '%')
+        </if>
+        <if test="params.status != null">
+            AND status = #{params.status}
+        </if>
+        <if test="params.enable != null">
+            AND enable = #{params.enable}
+        </if>
+        ORDER BY create_time DESC
+    </select>
+
+</mapper>

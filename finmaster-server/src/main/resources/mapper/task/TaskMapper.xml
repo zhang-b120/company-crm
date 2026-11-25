@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.task.mapper.TaskMapper">
+
+    <resultMap type="com.qykj.finmaster.task.domain.Task" id="TaskResult">
+        <id property="id" column="id"/>
+        <result property="taskNo" column="task_no"/>
+        <result property="orderNumber" column="order_number"/>
+        <result property="taskSource" column="task_source"/>
+        <result property="submitPerson" column="submit_person"/>
+        <result property="customerName" column="customer_name"/>
+        <result property="companyName" column="company_name"/>
+        <result property="companyId" column="company_id"/>
+        <result property="taxNumber" column="tax_number"/>
+        <result property="taskType" column="task_type"/>
+        <result property="effectiveDate" column="effective_date"/>
+        <result property="endDate" column="end_date"/>
+        <result property="productNames" column="product_names"/>
+        <result property="companyType" column="company_type"/>
+        <result property="accountingStandard" column="accounting_standard"/>
+        <result property="province" column="province"/>
+        <result property="currentStep" column="current_step"/>
+        <result property="status" column="status"/>
+        <result property="illustrate" column="illustrate"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <sql id="selectTaskVo">
+        select id, task_no, order_number, task_source, submit_person, customer_name, company_name, company_id,
+               tax_number, task_type, effective_date, end_date, product_names, company_type, accounting_standard,
+               province, current_step, status, illustrate, create_time, update_time
+        from task
+    </sql>
+
+    <select id="selectTaskList" parameterType="com.qykj.finmaster.task.domain.Task" resultMap="TaskResult">
+        select
+        t.id,
+        t.task_no,
+        t.order_number,
+        t.task_source,
+        t1.real_name as submit_person,
+        t.customer_name,
+        t.company_name,
+        t.company_id,
+        t.tax_number,
+        t.task_type,
+        t.effective_date,
+        t.end_date,
+        t.product_names,
+        t.company_type,
+        t.accounting_standard,
+        t.province,
+        t.current_step,
+        t.status,
+        t.illustrate,
+        t.create_time,
+        t.update_time,
+        t.tenant_id
+        from
+        task t
+        left join sys_user t1 on
+        t.submit_person = t1.username
+
+        <where>
+            <if test="tenantId != null  and tenantId !=''">
+                AND t.tenant_id = #{tenantId}
+            </if>
+            <if test="taskNo != null and taskNo != ''">
+                AND t.task_no = #{taskNo}
+            </if>
+            <if test="orderNumber != null and orderNumber != ''">
+                AND t.order_number = #{orderNumber}
+            </if>
+            <if test="customerName != null and customerName != ''">
+                AND t.customer_name like concat('%', #{customerName}, '%')
+            </if>
+            <if test="companyName != null and companyName != ''">
+                AND t.company_name like concat('%', #{companyName}, '%')
+            </if>
+            <if test="status != null and status != ''">
+                AND t.status = #{status}
+            </if>
+            <if test="dataScopeUserIds != null and dataScopeUserIds != ''">
+                and (t.submit_person in
+                <foreach item="item" collection="dataScopeUserIds" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+                )
+            </if>
+        </where>
+        order by create_time desc
+    </select>
+
+    <select id="selectTaskById" parameterType="Integer" resultMap="TaskResult">
+        select
+        t.id,
+        t.task_no,
+        t.order_number,
+        t.task_source,
+        t1.real_name as submit_person,
+        t.customer_name,
+        t.company_name,
+        t.company_id,
+        t.tax_number,
+        t.task_type,
+        t.effective_date,
+        t.end_date,
+        t.product_names,
+        t.company_type,
+        t.accounting_standard,
+        t.province,
+        t.current_step,
+        t.status,
+        t.illustrate,
+        t.create_time,
+        t.update_time
+        from
+        task t
+        left join sys_user t1 on
+        t.submit_person = t1.username
+        where t.id = #{id}
+        <if test="tenantId != null">
+            and t.tenant_id = #{tenantId}
+        </if>
+    </select>
+
+    <select id="selectTaskByOrderNumber" parameterType="String" resultMap="TaskResult">
+        <include refid="selectTaskVo"/>
+        where order_number = #{orderNumber}
+    </select>
+
+    <insert id="insertTask" parameterType="com.qykj.finmaster.task.domain.Task" useGeneratedKeys="true" keyProperty="id">
+        insert into task (
+            tenant_id, task_no, order_number, task_source, submit_person, customer_name, company_name, company_id,
+            tax_number, task_type, effective_date, end_date, product_names, company_type, accounting_standard,
+            province, current_step, status, illustrate, create_time, update_time
+        ) values (
+            #{tenantId}, #{taskNo}, #{orderNumber}, #{taskSource}, #{submitPerson}, #{customerName}, #{companyName}, #{companyId},
+            #{taxNumber}, #{taskType}, #{effectiveDate}, #{endDate}, #{productNames}, #{companyType}, #{accountingStandard},
+            #{province}, #{currentStep}, #{status}, #{illustrate}, now(), now()
+        )
+    </insert>
+
+    <update id="updateTask" parameterType="com.qykj.finmaster.task.domain.Task">
+        update task
+        <set>
+            <if test="taskNo != null">task_no = #{taskNo},</if>
+            <if test="orderNumber != null">order_number = #{orderNumber},</if>
+            <if test="taskSource != null">task_source = #{taskSource},</if>
+            <if test="submitPerson != null">submit_person = #{submitPerson},</if>
+            <if test="customerName != null">customer_name = #{customerName},</if>
+            <if test="companyName != null">company_name = #{companyName},</if>
+            <if test="companyId != null">company_id = #{companyId},</if>
+            <if test="taxNumber != null">tax_number = #{taxNumber},</if>
+            <if test="taskType != null">task_type = #{taskType},</if>
+            <if test="effectiveDate != null">effective_date = #{effectiveDate},</if>
+            <if test="endDate != null">end_date = #{endDate},</if>
+            <if test="productNames != null">product_names = #{productNames},</if>
+            <if test="companyType != null">company_type = #{companyType},</if>
+            <if test="accountingStandard != null">accounting_standard = #{accountingStandard},</if>
+            <if test="province != null">province = #{province},</if>
+            <if test="currentStep != null">current_step = #{currentStep},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="illustrate != null">illustrate = #{illustrate},</if>
+            update_time = now()
+        </set>
+        where id = #{id}
+    </update>
+
+    <update id="updateTaskStatus">
+        update task
+        set status = #{status},
+            current_step = #{currentStep},
+            update_time = now()
+        where id = #{id}
+    </update>
+
+    <delete id="deleteTask">
+        delete from task where id = #{id}
+    </delete>
+</mapper>

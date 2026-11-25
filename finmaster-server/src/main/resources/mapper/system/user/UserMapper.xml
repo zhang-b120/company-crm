@@ -1,0 +1,387 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.system.user.mapper.UserMapper">
+
+    <resultMap type="com.qykj.finmaster.system.user.entity.User" id="UserResult">
+        <id     property="id"           column="id"            />
+        <result property="tenantId"     column="tenant_id"     />
+        <result property="username"     column="username"      />
+        <result property="password"     column="password"      />
+        <result property="realName"     column="real_name"     />
+        <result property="email"        column="email"         />
+        <result property="phone"        column="phone"         />
+        <result property="avatar"       column="avatar"        />
+        <result property="enabled"      column="enabled"       />
+        <result property="createTime"   column="create_time"   />
+        <result property="updateTime"   column="update_time"   />
+        <result property="deleted"      column="deleted"       />
+    </resultMap>
+
+    <sql id="selectUserVo">
+        select id, tenant_id, username, password, real_name, email, phone, avatar, enabled,
+        create_time, update_time, deleted
+        from sys_user
+    </sql>
+
+    <!-- 根据用户名查询用户 -->
+    <select id="selectUserByUsername" resultMap="UserResult">
+        <include refid="selectUserVo"/>
+        where username = #{username} and deleted = 0
+    </select>
+
+    <resultMap type="com.qykj.finmaster.system.user.entity.resp.GetUserPageResp" id="selectUserList_Map">
+        <result property="id"           column="id"            />
+        <result property="username"     column="username"      />
+        <result property="password"     column="password"      />
+        <result property="realName"     column="real_name"     />
+        <result property="email"        column="email"         />
+        <result property="phone"        column="phone"         />
+        <result property="avatar"       column="avatar"        />
+        <result property="enabled"      column="enabled"       />
+        <result property="createTime"   column="create_time"   />
+        <result property="deptName"     column="deptName"      />
+    </resultMap>
+    <!-- 查询用户列表 -->
+    <select id="selectUserList"  resultMap="selectUserList_Map" >
+        <include refid="selectUserVo"/>
+        <where>
+            deleted = 0
+            <if test="params.username != null and params.username != ''">
+                AND username LIKE CONCAT('%', #{params.username}, '%')
+            </if>
+            <if test="params.realName != null and params.realName != ''">
+                AND real_name LIKE CONCAT('%', #{params.realName}, '%')
+            </if>
+            <if test="params.phone != null and params.phone != ''">
+                AND phone LIKE CONCAT('%', #{params.phone}, '%')
+            </if>
+            <if test="params.enabled != null">
+                AND enabled = #{params.enabled}
+            </if>
+            <if test="params.tenantId != null">
+                AND tenant_id = #{params.tenantId}
+            </if>
+        </where>
+        ORDER BY create_time DESC
+    </select>
+<!--根据用户id查询相关部门-->
+    <select id="selectDepartmentIds" parameterType="Long" resultType="java.lang.Long">
+        select department_id from sys_user_department where sys_user_department.user_id = #{id} and sys_user_department.deleted=0
+    </select>
+    <!-- 查询用户详细信息 -->
+    <select id="selectUserById" parameterType="Long" resultMap="UserResult">
+        <include refid="selectUserVo"/>
+        where id = #{userId} and deleted = 0
+    </select>
+
+    <!-- 新增用户 -->
+    <insert id="insertUser" parameterType="com.qykj.finmaster.system.user.entity.User" useGeneratedKeys="true" keyProperty="id">
+        insert into sys_user (
+            tenant_id,
+            username,
+            password,
+            real_name,
+            email,
+            phone,
+            avatar,
+            enabled,
+            create_time,
+            update_time
+        ) values (
+            #{tenantId},
+            #{username},
+            #{password},
+            #{realName},
+            #{email},
+            #{phone},
+            #{avatar},
+            #{enabled},
+            sysdate(),
+            sysdate()
+        )
+    </insert>
+
+    <!-- 修改用户 -->
+    <update id="updateUser" parameterType="com.qykj.finmaster.system.user.entity.User">
+        update sys_user
+        <set>
+            <if test="tenantId != null">tenant_id = #{tenantId},</if>
+            <if test="username != null">username = #{username},</if>
+            <if test="password != null">password = #{password},</if>
+            <if test="realName != null">real_name = #{realName},</if>
+            <if test="email != null">email = #{email},</if>
+            <if test="phone != null">phone = #{phone},</if>
+            <if test="avatar != null">avatar = #{avatar},</if>
+            <if test="enabled != null">enabled = #{enabled},</if>
+            update_time = sysdate()
+        </set>
+        where id = #{id} and deleted = 0
+    </update>
+
+    <!-- 删除用户 -->
+    <update id="deleteUserById" parameterType="Long">
+        update sys_user set deleted = 1 where id = #{userId}
+    </update>
+
+    <!-- 重置用户密码 -->
+    <update id="resetUserPassword">
+        update sys_user
+        set password = #{password},
+            update_time = sysdate()
+        where id = #{userId} and deleted = 0
+    </update>
+
+    <!-- 修改用户头像 -->
+    <update id="updateUserAvatar">
+        update sys_user
+        set avatar = #{avatar},
+            update_time = sysdate()
+        where id = #{userId} and deleted = 0
+    </update>
+
+    <!-- 修改用户状态 -->
+    <update id="updateUserStatus">
+        update sys_user
+        set enabled = #{enabled},
+            update_time = sysdate()
+        where id = #{userId} and deleted = 0
+    </update>
+
+    <!-- 查询用户已分配的角色ID列表 -->
+    <select id="findRoleIdsByUserId" resultType="java.lang.Long">
+        SELECT role_id FROM sys_user_role WHERE user_id = #{userId} AND deleted = 0
+    </select>
+
+    <!-- 查询用户权限标识列表 -->
+    <select id="getUserPermissions" resultType="java.lang.String">
+        SELECT DISTINCT m.permission
+        FROM sys_menu m
+        JOIN sys_role_menu rm ON m.id = rm.menu_id AND rm.deleted = 0
+        JOIN sys_user_role ur ON rm.role_id = ur.role_id AND ur.deleted = 0
+        WHERE ur.user_id = #{userId} AND m.deleted = 0 AND m.enabled = 1 AND m.permission IS NOT NULL AND m.permission != ''
+    </select>
+
+    <!-- 查询所有权限标识 -->
+    <select id="getAllPermissions" resultType="java.lang.String">
+        SELECT DISTINCT permission FROM sys_menu WHERE permission IS NOT NULL AND permission != '' AND deleted = 0 AND enabled = 1
+    </select>
+
+    <!-- 查询用户角色列表 -->
+    <select id="findUserRoles" resultType="com.qykj.finmaster.system.role.entity.Role">
+        SELECT r.* FROM sys_role r
+        INNER JOIN sys_user_role ur ON r.id = ur.role_id
+        WHERE ur.user_id = #{userId} AND r.enabled = 1
+    </select>
+
+    <!-- 查询用户菜单列表 -->
+    <select id="findUserMenus" resultType="com.qykj.finmaster.system.menu.entity.Menu">
+        SELECT DISTINCT m.* FROM sys_menu m
+        INNER JOIN sys_role_menu rm ON m.id = rm.menu_id
+        INNER JOIN sys_user_role ur ON rm.role_id = ur.role_id
+        WHERE ur.user_id = #{userId} AND m.enabled = 1
+        ORDER BY m.sort
+    </select>
+
+    <!-- 删除用户的角色关联 -->
+    <update id="deleteUserRoles">
+        UPDATE sys_user_role
+        SET deleted = 1
+        WHERE user_id = #{userId}
+    </update>
+
+    <!-- 批量插入用户角色关联 -->
+    <insert id="insertUserRoles">
+        INSERT INTO sys_user_role (user_id, role_id)
+        VALUES
+        <foreach collection="roleIds" item="roleId" separator=",">
+            (#{userId}, #{roleId})
+        </foreach>
+    </insert>
+
+    <select id="selectUserPage" resultType="com.qykj.finmaster.system.user.entity.resp.GetUserPageResp">
+        <include refid="selectUserVo"/>
+        <where>
+            deleted = 0
+            <if test="params.username != null and params.username != ''">
+                AND username LIKE CONCAT('%', #{params.username}, '%')
+            </if>
+            <if test="params.realName != null and params.realName != ''">
+                AND real_name LIKE CONCAT('%', #{params.realName}, '%')
+            </if>
+            <if test="params.phone != null and params.phone != ''">
+                AND phone LIKE CONCAT('%', #{params.phone}, '%')
+            </if>
+            <if test="params.enabled != null">
+                AND enabled = #{params.enabled}
+            </if>
+            <if test="params.tenantId != null">
+                AND tenant_id = #{params.tenantId}
+            </if>
+        </where>
+        ORDER BY create_time DESC
+    </select>
+
+    <select id="selectByUsername" resultMap="UserResult">
+        <include refid="selectUserVo"/>
+        WHERE username = #{username}
+        AND deleted = 0
+    </select>
+
+    <select id="selectCountByUsername" resultType="java.lang.Integer">
+        SELECT COUNT(1)
+        FROM sys_user
+        WHERE username = #{username}
+        AND deleted = 0
+    </select>
+    <!-- 根据部门ids，获取用户信息 -->
+    <select id="getDataScopeUserIds" resultType="java.lang.String">
+        select
+        t.username
+        from
+        sys_user t
+        left join sys_user_department t1 on
+        t.id = t1.user_id
+        WHERE t1.department_id IN
+        <foreach collection="deptIds" item="deptId" open="(" separator="," close=")">
+            #{deptId}
+        </foreach>
+    </select>
+    <select id="getDataScopeUserList" resultType="java.lang.Long">
+        select
+        t.id
+        from
+        sys_user t
+        left join sys_user_department t1 on
+        t.id = t1.user_id
+        WHERE t1.department_id IN
+        <foreach collection="deptIds" item="deptId" open="(" separator="," close=")">
+            #{deptId}
+        </foreach>
+    </select>
+    <!-- 获取所有用户的姓名列表 -->
+    <select id="selectAllRealNames" resultType="java.lang.String">
+        SELECT DISTINCT real_name
+        FROM sys_user
+        WHERE deleted = 0
+        AND real_name IS NOT NULL
+        AND real_name != ''
+        ORDER BY real_name
+    </select>
+    <select id="getRoleUser" resultType="com.qykj.finmaster.system.user.entity.User">
+        SELECT
+            su.username AS username,
+            su.real_name AS realName
+        FROM sys_user_role sur
+        LEFT JOIN sys_user su ON sur.user_id = su.id AND su.deleted = 0
+        WHERE sur.deleted = 0 AND su.username IS NOT NULL
+        AND sur.role_id = #{roleId}
+    </select>
+
+    <select id="getDepartmentUser" resultType="com.qykj.finmaster.system.user.entity.User">
+        select
+            su.username as username,
+            su.real_name as realName
+        from
+            sys_user su
+                left join
+            sys_user_department sud
+            on su.id = sud.user_id and sud.deleted = 0
+                left join
+            sys_department sd
+            on sud.department_id  = sd.id and sd.deleted  = 0
+        where
+            su.username IS NOT null
+          and su.deleted  = 0
+          and sd.id = #{departmentId}
+    </select>
+
+    <!-- 根据部门及其所有子部门查询用户列表 -->
+    <select id="selectUsersByDeptWithChildren" resultMap="UserResult">
+        WITH RECURSIVE dept_tree AS (
+            SELECT
+                id,
+                name,
+                parent_id
+            FROM sys_department
+            WHERE id = #{deptId}
+              AND deleted = 0
+            UNION ALL
+            SELECT
+                d.id,
+                d.name,
+                d.parent_id
+            FROM sys_department d
+                     INNER JOIN dept_tree dt ON d.parent_id = dt.id
+            WHERE d.deleted = 0
+        )
+        SELECT
+            u.id,
+            u.tenant_id,
+            u.username,
+            u.password,
+            u.real_name,
+            u.email,
+            u.phone,
+            u.avatar,
+            u.enabled,
+            u.create_time,
+            u.update_time,
+            u.deleted
+        FROM sys_user u
+        INNER JOIN sys_user_department ud ON u.id = ud.user_id AND ud.deleted = 0
+        INNER JOIN dept_tree dt ON ud.department_id = dt.id
+        WHERE u.deleted = 0
+        <if test="isChild != null">
+            <choose>
+                <when test="isChild == 0">
+                    AND dt.id = #{deptId}
+                </when>
+                <when test="isChild == 1">
+                    AND dt.id != #{deptId}
+                </when>
+            </choose>
+        </if>
+    </select>
+
+    <!-- 根据部门及其所有子部门查询部门与员工信息（用于销售业绩配置等场景） -->
+    <select id="selectDeptUsersWithChildren" resultType="com.qykj.finmaster.system.department.entity.resp.DeptUserInfoResp">
+        WITH RECURSIVE dept_tree AS (
+            SELECT
+                id,
+                name,
+                parent_id,
+                leader_username,
+                leader_real_name
+            FROM sys_department
+            WHERE id = #{deptId}
+              AND deleted = 0
+
+            UNION ALL
+
+            SELECT
+                d.id,
+                d.name,
+                d.parent_id,
+                d.leader_username,
+                d.leader_real_name
+            FROM sys_department d
+                     INNER JOIN dept_tree dt ON d.parent_id = dt.id
+            WHERE d.deleted = 0
+        )
+        SELECT
+            dt.id            AS deptId,
+            dt.name          AS deptName,
+            dt.leader_username AS leaderUsername,
+            dt.leader_real_name AS leaderRealName,
+            u.id             AS userId,
+            u.real_name      AS userRealName
+        FROM dept_tree dt
+        LEFT JOIN sys_user_department ud
+               ON dt.id = ud.department_id
+                  AND ud.deleted = 0
+        LEFT JOIN sys_user u
+               ON ud.user_id = u.id
+                  AND u.deleted = 0 AND u.enabled = 1
+        ORDER BY dt.id, u.id
+    </select>
+</mapper>

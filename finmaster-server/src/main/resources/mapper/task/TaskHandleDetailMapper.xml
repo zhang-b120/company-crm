@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.task.mapper.TaskHandleDetailMapper">
+    
+    <resultMap type="com.qykj.finmaster.task.domain.TaskHandleDetail" id="TaskHandleDetailResult">
+        <id property="id" column="id"/>
+        <result property="taskId" column="task_id"/>
+        <result property="flowId" column="flow_id"/>
+        <result property="handlerRole" column="handler_role"/>
+        <result property="taxOperatorPhone" column="tax_operator_phone"/>
+        <result property="taxOperatorPassword" column="tax_operator_password"/>
+        <result property="provinceCheckResult" column="province_check_result"/>
+        <result property="handleContent" column="handle_content"/>
+        <result property="createTime" column="create_time"/>
+        <result property="createBy" column="create_by"/>
+    </resultMap>
+
+    <sql id="selectTaskHandleDetailVo">
+        select id, task_id, flow_id, handler_role, tax_operator_phone, tax_operator_password, 
+               province_check_result, handle_content, create_time, create_by
+        from task_handle_detail
+    </sql>
+
+    <select id="selectTaskHandleDetail" resultMap="TaskHandleDetailResult">
+        <include refid="selectTaskHandleDetailVo"/>
+        where task_id = #{taskId} and flow_id = #{flowId}
+    </select>
+
+    <select id="selectTaskHandleDetailList" parameterType="Integer" resultMap="TaskHandleDetailResult">
+        <include refid="selectTaskHandleDetailVo"/>
+        where task_id = #{taskId}
+        order by create_time desc
+    </select>
+
+    <insert id="insertTaskHandleDetail" parameterType="com.qykj.finmaster.task.domain.TaskHandleDetail" useGeneratedKeys="true" keyProperty="id">
+        insert into task_handle_detail (
+            task_id, flow_id, handler_role, tax_operator_phone, tax_operator_password,
+            province_check_result, handle_content, create_time, create_by
+        ) values (
+            #{taskId}, #{flowId}, #{handlerRole}, #{taxOperatorPhone}, #{taxOperatorPassword},
+            #{provinceCheckResult}, #{handleContent}, now(), #{createBy}
+        )
+    </insert>
+
+    <update id="updateTaskHandleDetail" parameterType="com.qykj.finmaster.task.domain.TaskHandleDetail">
+        update task_handle_detail
+        <set>
+            <if test="handlerRole != null">handler_role = #{handlerRole},</if>
+            <if test="taxOperatorPhone != null">tax_operator_phone = #{taxOperatorPhone},</if>
+            <if test="taxOperatorPassword != null">tax_operator_password = #{taxOperatorPassword},</if>
+            <if test="provinceCheckResult != null">province_check_result = #{provinceCheckResult},</if>
+            <if test="handleContent != null">handle_content = #{handleContent},</if>
+        </set>
+        where id = #{id}
+    </update>
+
+    <delete id="deleteTaskHandleDetailByTaskId">
+        delete from task_handle_detail where task_id = #{taskId}
+        <if test="tenantId != null">
+            and tenant_id = #{tenantId}
+        </if>
+    </delete>
+
+</mapper> 

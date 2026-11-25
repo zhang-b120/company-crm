@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.qykj.finmaster.history.mapper.HistoryContractMapper">
+
+    <!--
+        判断是否已存在某公司+业务+合同类型的“历史订单批量生成”合同
+        用于幂等控制，避免重复生成
+    -->
+    <select id="countHistoryBatchContract" resultType="int">
+        SELECT COUNT(1)
+        FROM contract
+        WHERE tenant_id = #{tenantId}
+          AND company_id = #{companyId}
+          AND business_id = #{businessId}
+          AND contract_type = #{contractType}
+          AND remark = #{remark}
+          AND deleted = 0
+    </select>
+
+</mapper>
+

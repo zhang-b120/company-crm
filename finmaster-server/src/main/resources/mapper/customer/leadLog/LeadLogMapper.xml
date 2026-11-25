@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.customer.leadLog.mapper.LeadLogMapper">
+
+    <resultMap type="com.qykj.finmaster.customer.leadLog.entity.LeadLog" id="LeadLogResult">
+        <id     property="id"           column="id"            />
+        <result property="tenantId"     column="tenant_id"     />
+        <result property="leadId"       column="lead_id"       />
+        <result property="logType"      column="log_type"      />
+        <result property="content"      column="content"       />
+        <result property="nextFollowTime" column="next_follow_time" />
+        <result property="followMethod" column="follow_method" />
+        <result property="operatorId"   column="operator_id"   />
+        <result property="operatorName" column="operator_name" />
+        <result property="createTime"   column="create_time"   />
+        <result property="updateTime"   column="update_time"   />
+    </resultMap>
+
+    <sql id="selectLeadLogVo">
+        select id, tenant_id, lead_id, log_type, content, next_follow_time, follow_method, operator_id, operator_name, create_time, update_time
+        from crm_lead_log
+    </sql>
+
+    <select id="selectByLeadId" parameterType="Long" resultMap="LeadLogResult">
+        <include refid="selectLeadLogVo"/>
+        <where>
+            lead_id = #{leadId}
+        </where>
+        order by create_time desc
+    </select>
+
+    <insert id="insertLeadLog" parameterType="com.qykj.finmaster.customer.leadLog.entity.LeadLog" useGeneratedKeys="true" keyProperty="id">
+        insert into crm_lead_log (
+            tenant_id,
+            lead_id,
+            log_type,
+            content,
+            next_follow_time,
+            follow_method,
+            operator_id,
+            operator_name,
+            create_time,
+            update_time
+        ) values (
+            #{tenantId},
+            #{leadId},
+            #{logType},
+            #{content},
+            #{nextFollowTime},
+            #{followMethod},
+            #{operatorId},
+            #{operatorName},
+            sysdate(),
+            sysdate()
+        )
+    </insert>
+
+    <update id="updateLeadLogLeadId">
+        update crm_lead_log
+        set lead_id = #{toLeadId}
+        where lead_id = #{fromLeadId}
+        <if test="logType != null">
+            and log_type = #{logType}
+        </if>
+    </update>
+
+</mapper>

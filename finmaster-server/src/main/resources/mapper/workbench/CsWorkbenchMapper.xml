@@ -1,0 +1,576 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.workbench.mapper.CsWorkbenchMapper">
+
+    <!-- 当前登录人作为持有人：current_owner_user 优先；兼容 owner_user 同步保留 -->
+    <sql id="ownerCondition">
+        AND (current_owner_user = #{username} OR owner_user = #{username})
+    </sql>
+
+    <!-- 非终态：DRAFT 不计入（未下发）；DONE/CANCELED/REJECTED 排除。
+         CONCESSION_DONE（让步完成）算"在手"——管家虽完成但客服仍需补齐缺失项，工作台需展示。 -->
+    <sql id="activeStatus">
+        AND status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE')
+    </sql>
+
+    <select id="countMyActiveTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+        <include refid="ownerCondition"/>
+        <include refid="activeStatus"/>
+    </select>
+
+    <select id="countMyTodayDue" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND due_time IS NOT NULL
+          AND due_time &gt;= #{dayStart}
+          AND due_time &lt; #{dayEnd}
+        <include refid="ownerCondition"/>
+        <include refid="activeStatus"/>
+    </select>
+
+    <select id="countMyStaleTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND update_time &lt; NOW() - INTERVAL #{staleDays} DAY
+        <include refid="ownerCondition"/>
+        <include refid="activeStatus"/>
+    </select>
+
+    <select id="countMyMonthDone" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND status = 'DONE'
+          AND complete_time IS NOT NULL
+          AND complete_time &gt;= #{start}
+          AND complete_time &lt; #{end}
+        <include refid="ownerCondition"/>
+    </select>
+
+    <select id="countMyMonthNew" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND create_time &gt;= #{start}
+          AND create_time &lt; #{end}
+        <include refid="ownerCondition"/>
+    </select>
+
+    <select id="countMyMonthDue" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND due_time IS NOT NULL
+          AND due_time &gt;= #{start}
+          AND due_time &lt; #{end}
+        <include refid="ownerCondition"/>
+    </select>
+
+    <select id="countMyOverdue" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND due_time IS NOT NULL
+          AND due_time &lt; #{now}
+          AND status NOT IN ('DONE','CANCELED')
+        <include refid="ownerCondition"/>
+    </select>
+
+    <!-- 拉取本月已完成任务的 create_time + complete_time 用于计算工作时长 -->
+    <select id="selectMyMonthCompletedTaskTimes" resultType="java.util.Map">
+        SELECT create_time AS createTime, complete_time AS completeTime
+        FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND status = 'DONE'
+          AND complete_time IS NOT NULL
+          AND create_time IS NOT NULL
+          AND complete_time &gt;= #{start}
+          AND complete_time &lt; #{end}
+        <include refid="ownerCondition"/>
+    </select>
+
+    <!-- 本月完成数排行：按 current_owner_user 聚合，关联 sys_user 取 real_name -->
+    <select id="rankMonthCompletedByOwner" resultType="java.util.Map">
+        SELECT
+            w.current_owner_user AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(*) AS count
+        FROM work_order w
+        LEFT JOIN sys_user u ON u.username = w.current_owner_user AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE w.deleted = 0
+          AND w.tenant_id = #{tenantId}
+          AND w.task_type = #{taskType}
+          AND w.status = 'DONE'
+          AND w.complete_time IS NOT NULL
+          AND w.complete_time &gt;= #{start}
+          AND w.complete_time &lt; #{end}
+          AND w.current_owner_user IS NOT NULL
+        GROUP BY w.current_owner_user
+        ORDER BY count DESC, MIN(w.complete_time) ASC
+    </select>
+
+    <!-- 我的某类型任务总数（用于完成率分母，排除 CANCELED / DRAFT） -->
+    <select id="countMyAllTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND status NOT IN ('CANCELED','DRAFT')
+        <include refid="ownerCondition"/>
+    </select>
+
+    <!-- 我的某类型累计完成数（无时间限制） -->
+    <select id="countMyAllDone" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND status = 'DONE'
+        <include refid="ownerCondition"/>
+    </select>
+
+    <!-- ===========数据收集：基于"指定账期"的企业完成情况=========== -->
+
+    <!-- 当前用户在指定账期下的数据收集任务单数（meta_json.$.period 匹配） -->
+    <select id="countMyDataCollectionTasksByPeriod" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM work_order
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND task_type = 'DATA_COLLECTION'
+          AND status NOT IN ('CANCELED','DRAFT')
+          AND (current_owner_user = #{username} OR owner_user = #{username})
+          AND JSON_UNQUOTE(JSON_EXTRACT(meta_json, '$.period')) = #{period}
+    </select>
+
+    <!-- 指定 butler 管辖的企业总数 -->
+    <select id="countCompaniesByButler" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT cs.company_id)
+        FROM company_service cs
+        WHERE cs.deleted = 0
+          AND cs.butler_owner_user = #{butler}
+    </select>
+
+    <!-- 指定 butler + 账期下已上传/标记的企业数 -->
+    <select id="countCompaniesUploadedByPeriod" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT cs.company_id)
+        FROM company_service cs
+        JOIN company_bank_statement_upload bsu
+          ON bsu.company_id = cs.company_id
+          AND bsu.period = #{period}
+          AND (COALESCE(bsu.upload_count, 0) &gt; 0 OR COALESCE(bsu.no_statement, 0) = 1)
+        WHERE cs.deleted = 0
+          AND cs.butler_owner_user = #{butler}
+    </select>
+
+    <!--
+      按"指定账期"的企业完成率排名
+      参与者：所有 company_service.butler_owner_user 出现过的 butler（管辖任意企业）
+    -->
+    <select id="rankDataCollectionByPeriod" resultType="java.util.Map">
+        SELECT
+            cs.butler_owner_user AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(DISTINCT cs.company_id) AS total_count,
+            COUNT(DISTINCT CASE WHEN bsu.id IS NOT NULL THEN cs.company_id END) AS done_count,
+            ROUND(
+                COUNT(DISTINCT CASE WHEN bsu.id IS NOT NULL THEN cs.company_id END) * 100.0
+                / NULLIF(COUNT(DISTINCT cs.company_id), 0),
+                2
+            ) AS rate
+        FROM company_service cs
+        LEFT JOIN company_bank_statement_upload bsu
+          ON bsu.company_id = cs.company_id
+          AND bsu.period = #{period}
+          AND (COALESCE(bsu.upload_count, 0) &gt; 0 OR COALESCE(bsu.no_statement, 0) = 1)
+        LEFT JOIN sys_user u ON u.username = cs.butler_owner_user AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE cs.deleted = 0
+          AND cs.butler_owner_user IS NOT NULL
+          AND cs.butler_owner_user != ''
+        GROUP BY cs.butler_owner_user
+        HAVING total_count &gt; 0
+        ORDER BY rate DESC, done_count DESC
+    </select>
+
+    <!-- 按完成率排名（任务级，留作 BOOKKEEPING/RENEWAL 备用）：DONE/总 × 100，相同率按完成数倒序 -->
+    <select id="rankByCompletionRate" resultType="java.util.Map">
+        SELECT
+            w.current_owner_user AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE WHEN w.status = 'DONE' THEN 1 ELSE 0 END) AS done_count,
+            COUNT(*) AS total_count,
+            ROUND(SUM(CASE WHEN w.status = 'DONE' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS rate
+        FROM work_order w
+        LEFT JOIN sys_user u ON u.username = w.current_owner_user AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE w.deleted = 0
+          AND w.tenant_id = #{tenantId}
+          AND w.task_type = #{taskType}
+          AND w.status NOT IN ('CANCELED','DRAFT')
+          AND w.current_owner_user IS NOT NULL
+        GROUP BY w.current_owner_user
+        HAVING COUNT(*) &gt; 0
+        ORDER BY rate DESC, done_count DESC
+    </select>
+
+    <!-- ===========外勤任务（field_work_task 表，assignee_id = LoginUser.userId）=========== -->
+
+    <select id="countMyFieldWorkAllTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM field_work_task
+        WHERE deleted = 0
+          AND assignee_id = #{userId}
+          AND status &lt;&gt; 'CANCELLED'
+    </select>
+
+    <select id="countMyFieldWorkActiveTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM field_work_task
+        WHERE deleted = 0
+          AND assignee_id = #{userId}
+          AND status IN ('PENDING','IN_PROGRESS')
+    </select>
+
+    <select id="countMyFieldWorkMonthDone" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM field_work_task
+        WHERE deleted = 0
+          AND assignee_id = #{userId}
+          AND status = 'COMPLETED'
+          AND actual_end_time IS NOT NULL
+          AND actual_end_time &gt;= #{start}
+          AND actual_end_time &lt; #{end}
+    </select>
+
+    <select id="countMyFieldWorkStaleTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM field_work_task
+        WHERE deleted = 0
+          AND assignee_id = #{userId}
+          AND status IN ('PENDING','IN_PROGRESS')
+          AND update_time &lt; NOW() - INTERVAL #{staleDays} DAY
+    </select>
+
+    <select id="countMyFieldWorkMonthNew" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM field_work_task
+        WHERE deleted = 0
+          AND assignee_id = #{userId}
+          AND create_time &gt;= #{start}
+          AND create_time &lt; #{end}
+    </select>
+
+    <!-- 本月完成的 (create_time, actual_end_time) 对：从下发到完成的工作时长输入 -->
+    <select id="selectMyFieldWorkMonthCompletedTimes" resultType="java.util.Map">
+        SELECT
+            create_time AS createTime,
+            actual_end_time AS completeTime
+        FROM field_work_task
+        WHERE deleted = 0
+          AND assignee_id = #{userId}
+          AND status = 'COMPLETED'
+          AND actual_end_time IS NOT NULL
+          AND create_time IS NOT NULL
+          AND actual_end_time &gt;= #{start}
+          AND actual_end_time &lt; #{end}
+    </select>
+
+    <!-- ============ 团队（IN list）变体 ============ -->
+
+    <select id="countTeamActiveTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0 AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE')
+          AND (current_owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            OR owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+    </select>
+
+    <select id="countTeamMonthDone" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0 AND tenant_id = #{tenantId}
+          AND task_type = #{taskType} AND status = 'DONE'
+          AND complete_time IS NOT NULL
+          AND complete_time &gt;= #{start} AND complete_time &lt; #{end}
+          AND (current_owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            OR owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+    </select>
+
+    <select id="countTeamMonthNew" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0 AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND create_time &gt;= #{start} AND create_time &lt; #{end}
+          AND (current_owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            OR owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+    </select>
+
+    <select id="countTeamStaleTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0 AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE')
+          AND update_time &lt; NOW() - INTERVAL #{staleDays} DAY
+          AND (current_owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            OR owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+    </select>
+
+    <select id="countTeamMonthDue" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0 AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND due_time IS NOT NULL
+          AND due_time &gt;= #{start} AND due_time &lt; #{end}
+          AND (current_owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            OR owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+    </select>
+
+    <select id="countTeamOverdue" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM work_order
+        WHERE deleted = 0 AND tenant_id = #{tenantId}
+          AND task_type = #{taskType}
+          AND due_time IS NOT NULL AND due_time &lt; #{now}
+          AND status NOT IN ('DONE','CANCELED')
+          AND (current_owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            OR owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+    </select>
+
+    <select id="sumTeamMonthRenewAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(o.final_amount), 0)
+        FROM work_order w
+        JOIN orders o ON o.id = w.order_id AND o.tenant_id = #{tenantId} AND o.status = 'PAID'
+        WHERE w.deleted = 0 AND w.tenant_id = #{tenantId}
+          AND w.task_type = 'RENEWAL' AND w.status = 'DONE'
+          AND w.complete_time IS NOT NULL
+          AND w.complete_time &gt;= #{start} AND w.complete_time &lt; #{end}
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            OR w.owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+    </select>
+
+    <select id="selectTeamMonthCompletedTaskTimes" resultType="java.util.Map">
+        SELECT create_time AS createTime, complete_time AS completeTime
+        FROM work_order
+        WHERE deleted = 0 AND tenant_id = #{tenantId}
+          AND task_type = #{taskType} AND status = 'DONE'
+          AND complete_time IS NOT NULL AND create_time IS NOT NULL
+          AND complete_time &gt;= #{start} AND complete_time &lt; #{end}
+          AND (current_owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            OR owner_user IN
+            <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+    </select>
+
+    <!-- 代账 byMember -->
+    <select id="bookkeepingStatsByMember" resultType="java.util.Map">
+        SELECT
+            COALESCE(w.current_owner_user, w.owner_user) AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE WHEN w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE') THEN 1 ELSE 0 END) AS active_count,
+            SUM(CASE WHEN w.status = 'DONE' AND w.complete_time IS NOT NULL
+                    AND w.complete_time &gt;= #{monthStart} AND w.complete_time &lt; #{monthEnd}
+                THEN 1 ELSE 0 END) AS month_done,
+            SUM(CASE WHEN w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE')
+                    AND w.update_time &lt; NOW() - INTERVAL #{staleDays} DAY
+                THEN 1 ELSE 0 END) AS stale_count
+        FROM work_order w
+        LEFT JOIN sys_user u ON u.username = COALESCE(w.current_owner_user, w.owner_user) AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE w.deleted = 0 AND w.tenant_id = #{tenantId}
+          AND w.task_type = 'BOOKKEEPING'
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR w.owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>)
+        GROUP BY COALESCE(w.current_owner_user, w.owner_user)
+        ORDER BY active_count DESC
+    </select>
+
+    <!-- 续费 byMember -->
+    <select id="renewalStatsByMember" resultType="java.util.Map">
+        SELECT
+            COALESCE(w.current_owner_user, w.owner_user) AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE WHEN w.status IN ('PENDING','RUNNING','WAITING_CHILD','SUSPENDED','CONCESSION_DONE') THEN 1 ELSE 0 END) AS active_count,
+            SUM(CASE WHEN w.status = 'DONE' AND w.complete_time IS NOT NULL
+                    AND w.complete_time &gt;= #{monthStart} AND w.complete_time &lt; #{monthEnd}
+                THEN 1 ELSE 0 END) AS month_done,
+            SUM(CASE WHEN w.due_time IS NOT NULL AND w.due_time &lt; #{now} AND w.status NOT IN ('DONE','CANCELED')
+                THEN 1 ELSE 0 END) AS overdue_count
+        FROM work_order w
+        LEFT JOIN sys_user u ON u.username = COALESCE(w.current_owner_user, w.owner_user) AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE w.deleted = 0 AND w.tenant_id = #{tenantId}
+          AND w.task_type = 'RENEWAL'
+          AND (w.current_owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+            OR w.owner_user IN
+            <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>)
+        GROUP BY COALESCE(w.current_owner_user, w.owner_user)
+        ORDER BY active_count DESC
+    </select>
+
+    <!-- 数据收集 byMember -->
+    <select id="dataCollectionStatsByMember" resultType="java.util.Map">
+        SELECT
+            cs.butler_owner_user AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(DISTINCT cs.company_id) AS total_count,
+            COUNT(DISTINCT CASE WHEN bsu.id IS NOT NULL THEN cs.company_id END) AS done_count
+        FROM company_service cs
+        LEFT JOIN company_bank_statement_upload bsu
+          ON bsu.company_id = cs.company_id AND bsu.period = #{period}
+          AND (COALESCE(bsu.upload_count,0) &gt; 0 OR COALESCE(bsu.no_statement,0) = 1)
+        LEFT JOIN sys_user u ON u.username = cs.butler_owner_user AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE cs.deleted = 0
+          AND cs.butler_owner_user IN
+          <foreach collection="usernames" item="x" open="(" separator="," close=")">#{x}</foreach>
+        GROUP BY cs.butler_owner_user
+        ORDER BY done_count DESC
+    </select>
+
+    <!-- ============ 团队外勤 SQL ============ -->
+
+    <select id="countTeamFieldWorkAll" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM field_work_task
+        WHERE deleted = 0 AND status &lt;&gt; 'CANCELLED'
+          AND assignee_id IN
+          <foreach collection="userIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+    </select>
+
+    <select id="countTeamFieldWorkActive" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM field_work_task
+        WHERE deleted = 0 AND status IN ('PENDING','IN_PROGRESS')
+          AND assignee_id IN
+          <foreach collection="userIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+    </select>
+
+    <select id="countTeamFieldWorkMonthDone" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM field_work_task
+        WHERE deleted = 0 AND status = 'COMPLETED'
+          AND actual_end_time IS NOT NULL
+          AND actual_end_time &gt;= #{start} AND actual_end_time &lt; #{end}
+          AND assignee_id IN
+          <foreach collection="userIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+    </select>
+
+    <select id="countTeamFieldWorkStale" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM field_work_task
+        WHERE deleted = 0 AND status IN ('PENDING','IN_PROGRESS')
+          AND update_time &lt; NOW() - INTERVAL #{staleDays} DAY
+          AND assignee_id IN
+          <foreach collection="userIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+    </select>
+
+    <select id="countTeamFieldWorkMonthNew" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM field_work_task
+        WHERE deleted = 0
+          AND create_time &gt;= #{start} AND create_time &lt; #{end}
+          AND assignee_id IN
+          <foreach collection="userIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+    </select>
+
+    <select id="selectTeamFieldWorkMonthCompletedTimes" resultType="java.util.Map">
+        SELECT create_time AS createTime, actual_end_time AS completeTime
+        FROM field_work_task
+        WHERE deleted = 0 AND status = 'COMPLETED'
+          AND actual_end_time IS NOT NULL AND create_time IS NOT NULL
+          AND actual_end_time &gt;= #{start} AND actual_end_time &lt; #{end}
+          AND assignee_id IN
+          <foreach collection="userIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+    </select>
+
+    <select id="fieldWorkStatsByMember" resultType="java.util.Map">
+        SELECT
+            u.username AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE WHEN f.status IN ('PENDING','IN_PROGRESS') THEN 1 ELSE 0 END) AS active_count,
+            SUM(CASE WHEN f.status = 'COMPLETED' AND f.actual_end_time IS NOT NULL
+                    AND f.actual_end_time &gt;= #{monthStart} AND f.actual_end_time &lt; #{monthEnd}
+                THEN 1 ELSE 0 END) AS month_done,
+            SUM(CASE WHEN f.status IN ('PENDING','IN_PROGRESS')
+                    AND f.update_time &lt; NOW() - INTERVAL #{staleDays} DAY
+                THEN 1 ELSE 0 END) AS stale_count
+        FROM field_work_task f
+        JOIN sys_user u ON u.id = f.assignee_id AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE f.deleted = 0
+          AND f.assignee_id IN
+          <foreach collection="userIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+        GROUP BY u.username
+        ORDER BY active_count DESC
+    </select>
+
+    <!-- 外勤本月完成数排名（按 assignee_id），同租户下全员 -->
+    <select id="rankFieldWorkMonthCompleted" resultType="java.util.Map">
+        SELECT
+            u.username AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(*) AS count
+        FROM field_work_task f
+        JOIN sys_user u ON u.id = f.assignee_id AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE f.deleted = 0
+          AND f.tenant_id = #{tenantId}
+          AND f.status = 'COMPLETED'
+          AND f.actual_end_time IS NOT NULL
+          AND f.actual_end_time &gt;= #{start}
+          AND f.actual_end_time &lt; #{end}
+        GROUP BY u.username
+        ORDER BY count DESC, MIN(f.actual_end_time) ASC
+    </select>
+
+    <!-- 节点级排行：按 work_order_step 中指定 step_code + status=DONE + complete_time 在本月,
+         按 step.owner_user 聚合，关联其所属任务过滤 task_type 与租户 -->
+    <select id="rankMonthCompletedByStep" resultType="java.util.Map">
+        SELECT
+            s.owner_user AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(*) AS count
+        FROM work_order_step s
+        JOIN work_order w ON w.id = s.work_order_id AND w.tenant_id = #{tenantId} AND w.deleted = 0 AND w.task_type = #{taskType}
+        LEFT JOIN sys_user u ON u.username = s.owner_user AND u.tenant_id = #{tenantId} AND u.deleted = 0
+        WHERE s.tenant_id = #{tenantId}
+          AND s.step_code = #{stepCode}
+          AND s.status = 'DONE'
+          AND s.complete_time IS NOT NULL
+          AND s.complete_time &gt;= #{start}
+          AND s.complete_time &lt; #{end}
+          AND s.owner_user IS NOT NULL
+        GROUP BY s.owner_user
+        ORDER BY count DESC, MIN(s.complete_time) ASC
+    </select>
+
+    <!-- 本月已完成的续费任务关联订单的 PAID 金额合计；orders 表无 deleted 列 -->
+    <select id="sumMyMonthRenewAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(o.final_amount), 0)
+        FROM work_order w
+        JOIN orders o ON o.id = w.order_id AND o.tenant_id = #{tenantId} AND o.status = 'PAID'
+        WHERE w.deleted = 0
+          AND w.tenant_id = #{tenantId}
+          AND w.task_type = 'RENEWAL'
+          AND w.status = 'DONE'
+          AND w.complete_time IS NOT NULL
+          AND w.complete_time &gt;= #{start}
+          AND w.complete_time &lt; #{end}
+          AND (w.current_owner_user = #{username} OR w.owner_user = #{username})
+    </select>
+
+</mapper>

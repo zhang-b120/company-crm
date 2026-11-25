@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.customer.company.mapper.CustomerCompanyLogMapper">
+    
+    <resultMap type="com.qykj.finmaster.customer.company.domain.CustomerCompanyLog" id="CustomerCompanyLogResult">
+        <result property="id" column="id"/>
+        <result property="tenantId" column="tenant_id"/>
+        <result property="customerId" column="customer_id"/>
+        <result property="logType" column="log_type"/>
+        <result property="content" column="content"/>
+        <result property="operatorId" column="operator_id"/>
+        <result property="operatorName" column="operator_name"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <sql id="selectCustomerCompanyLogVo">
+        select id, tenant_id, customer_id, log_type, content, operator_id, operator_name, create_time
+        from customer_company_log
+    </sql>
+
+    <select id="selectCustomerCompanyLogList" parameterType="com.qykj.finmaster.customer.company.domain.CustomerCompanyLog" resultMap="CustomerCompanyLogResult">
+        <include refid="selectCustomerCompanyLogVo"/>
+        <where>
+            <if test="tenantId != null">
+                AND tenant_id = #{tenantId}
+            </if>
+            <if test="customerId != null">
+                AND customer_id = #{customerId}
+            </if>
+            <if test="logType != null">
+                AND log_type = #{logType}
+            </if>
+        </where>
+        order by create_time desc
+    </select>
+    
+    <select id="selectCustomerCompanyLogById" parameterType="Long" resultMap="CustomerCompanyLogResult">
+        <include refid="selectCustomerCompanyLogVo"/>
+        where id = #{id}
+    </select>
+        
+    <insert id="insertCustomerCompanyLog" parameterType="com.qykj.finmaster.customer.company.domain.CustomerCompanyLog" useGeneratedKeys="true" keyProperty="id">
+        insert into customer_company_log
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="tenantId != null">tenant_id,</if>
+            <if test="customerId != null">customer_id,</if>
+            <if test="logType != null">log_type,</if>
+            <if test="content != null">content,</if>
+            <if test="operatorId != null">operator_id,</if>
+            <if test="operatorName != null">operator_name,</if>
+            <if test="createTime != null">create_time,</if>
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="tenantId != null">#{tenantId},</if>
+            <if test="customerId != null">#{customerId},</if>
+            <if test="logType != null">#{logType},</if>
+            <if test="content != null">#{content},</if>
+            <if test="operatorId != null">#{operatorId},</if>
+            <if test="operatorName != null">#{operatorName},</if>
+            <if test="createTime != null">#{createTime},</if>
+        </trim>
+    </insert>
+
+    <update id="updateCustomerCompanyLog" parameterType="com.qykj.finmaster.customer.company.domain.CustomerCompanyLog">
+        update customer_company_log
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="customerId != null">customer_id = #{customerId},</if>
+            <if test="logType != null">log_type = #{logType},</if>
+            <if test="content != null">content = #{content},</if>
+            <if test="operatorId != null">operator_id = #{operatorId},</if>
+            <if test="operatorName != null">operator_name = #{operatorName},</if>
+            <if test="createTime != null">create_time = #{createTime},</if>
+        </trim>
+        where id = #{id}
+    </update>
+
+    <delete id="deleteCustomerCompanyLogById" parameterType="Long">
+        delete from customer_company_log where id = #{id}
+    </delete>
+
+    <delete id="deleteCustomerCompanyLogByIds" parameterType="String">
+        delete from customer_company_log where id in 
+        <foreach item="id" collection="array" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+</mapper> 

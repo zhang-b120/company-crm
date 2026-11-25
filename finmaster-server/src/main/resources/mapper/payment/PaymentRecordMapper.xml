@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.payment.mapper.PaymentRecordMapper">
+
+    <resultMap type="com.qykj.finmaster.payment.domain.PaymentRecord" id="PaymentRecordResult">
+        <id     property="id"                column="id"                />
+        <result property="orderNo"           column="order_no"          />
+        <result property="paymentStatus"     column="payment_status"    />
+        <result property="notifyStatus"      column="notify_status"     />
+        <result property="prepayTime"        column="prepay_time"       />
+        <result property="payTime"           column="pay_time"          />
+        <result property="timeOutInterval"   column="time_out_interval" />
+        <result property="paymentConfigId"   column="payment_config_id" />
+        <result property="createBy"          column="create_by"         />
+        <result property="createByName"      column="create_by_name"    />
+        <result property="createTime"        column="create_time"       />
+        <result property="updateBy"          column="update_by"         />
+        <result property="updateByName"      column="update_by_name"    />
+        <result property="updateTime"        column="update_time"       />
+        <result property="remark"            column="remark"            />
+    </resultMap>
+
+    <sql id="selectPaymentRecordVo">
+        select id, order_no, payment_status, notify_status, prepay_time, pay_time,
+        time_out_interval, payment_config_id, create_by, create_by_name, create_time,
+        update_by, update_by_name, update_time, remark
+        from payment_record
+    </sql>
+
+    <select id="selectPaymentRecordList" parameterType="com.qykj.finmaster.payment.domain.PaymentRecord" resultMap="PaymentRecordResult">
+        <include refid="selectPaymentRecordVo"/>
+        <where>
+            <if test="orderNo != null and orderNo != ''">
+                AND order_no = #{orderNo}
+            </if>
+            <if test="paymentStatus != null and paymentStatus != ''">
+                AND payment_status = #{paymentStatus}
+            </if>
+            <if test="notifyStatus != null and notifyStatus != ''">
+                AND notify_status = #{notifyStatus}
+            </if>
+            <if test="paymentConfigId != null">
+                AND payment_config_id = #{paymentConfigId}
+            </if>
+        </where>
+    </select>
+
+    <select id="selectPaymentRecordById" parameterType="Long" resultMap="PaymentRecordResult">
+        <include refid="selectPaymentRecordVo"/>
+        where id = #{id}
+    </select>
+</mapper>

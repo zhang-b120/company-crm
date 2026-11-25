@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.system.bussiness.mapper.SysBusinessMapper">
+
+    <resultMap id="BusinessListResult" type="com.qykj.finmaster.system.bussiness.domain.resp.GetBusinessListResp">
+        <id     property="id"            column="id"/>
+        <result property="businessCode"  column="business_code"/>
+        <result property="businessName"  column="business_name"/>
+        <result property="contractRelatedOrder" column="contract_related_order"/>
+        <result property="checkRenewalCount"    column="check_renewal_count"/>
+        <result property="checkAddBusinessId"   column="check_add_business_id"/>
+        <result property="remark"        column="remark"/>
+        <result property="createByName"  column="create_by_name"/>
+        <result property="createTime"    column="create_time"/>
+    </resultMap>
+
+    <sql id="selectBusinessVo">
+        SELECT
+            id,
+            business_code,
+            business_name,
+            contract_related_order,
+            check_renewal_count,
+            check_add_business_id,
+            remark,
+            create_by_name,
+            create_time,
+            tenant_id,
+            deleted
+        FROM sys_business
+        WHERE deleted = 0
+    </sql>
+
+    <select id="getBusinessList" resultMap="BusinessListResult">
+        <include refid="selectBusinessVo"/>
+        <if test="params.tenantId != null">
+            AND tenant_id = #{params.tenantId}
+        </if>
+        <if test="params.businessCode != null and params.businessCode != ''">
+            AND business_code LIKE CONCAT('%', #{params.businessCode}, '%')
+        </if>
+        <if test="params.businessName != null and params.businessName != ''">
+            AND business_name LIKE CONCAT('%', #{params.businessName}, '%')
+        </if>
+        ORDER BY create_time DESC
+    </select>
+
+</mapper>
+

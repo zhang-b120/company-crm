@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.system.department.mapper.DepartmentMapper">
+
+    <!-- 根据ID查询部门 -->
+    <select id="selectById" resultType="com.qykj.finmaster.system.department.entity.Department">
+        SELECT * FROM sys_department WHERE id = #{id} AND deleted = 0
+    </select>
+
+    <!-- 根据父部门ID查询子部门列表 -->
+    <select id="selectByParentId" resultType="com.qykj.finmaster.system.department.entity.Department">
+        SELECT * FROM sys_department WHERE parent_id = #{parentId} AND deleted = 0 ORDER BY sort
+    </select>
+
+    <!-- 逻辑删除部门 -->
+    <update id="deleteById">
+        UPDATE sys_department SET deleted = 1 WHERE id = #{id}
+    </update>
+
+    <!-- 检查部门编码是否存在 -->
+    <select id="checkCodeExists" resultType="int">
+        SELECT COUNT(*) FROM sys_department 
+        WHERE code = #{code} AND deleted = 0
+        <if test="id != null">
+            AND id != #{id}
+        </if>
+    </select>
+
+    <!-- 查询部门下的用户数量 -->
+    <select id="countUsersByDeptId" resultType="int">
+        SELECT COUNT(*) FROM sys_user_department 
+        WHERE department_id = #{deptId} AND deleted = 0
+    </select>
+
+    <select id="findDepartmentsByUserId" resultType="com.qykj.finmaster.system.department.entity.Department">
+        SELECT d.* FROM sys_department d
+        INNER JOIN sys_user u ON d.id = u.department_id
+        WHERE u.id = #{userId} AND d.enabled = 1
+        ORDER BY d.sort
+    </select>
+    
+    <select id="findChildren" resultType="com.qykj.finmaster.system.department.entity.Department">
+        SELECT * FROM sys_department
+        WHERE parent_id = #{parentId} AND enabled = 1
+        ORDER BY sort
+    </select>
+</mapper> 

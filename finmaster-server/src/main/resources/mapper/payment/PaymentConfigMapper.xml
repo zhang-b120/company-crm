@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.payment.mapper.PaymentConfigMapper">
+
+    <resultMap type="com.qykj.finmaster.payment.domain.PaymentConfig" id="PaymentConfigResult">
+        <id     property="id"                column="id"                />
+        <result property="paymentName"       column="payment_name"      />
+        <result property="paymentType"       column="payment_type"      />
+        <result property="mchId"            column="mch_id"            />
+        <result property="appId"            column="app_id"            />
+        <result property="appKey"           column="app_key"           />
+        <result property="publicKey"        column="public_key"        />
+        <result property="privateKey"       column="private_key"       />
+        <result property="certPath"         column="cert_path"         />
+        <result property="certSerialNumber" column="cert_serial_number"/>
+        <result property="privateKeyPath"   column="private_key_path"  />
+        <result property="privateKeyV3"     column="private_key_v3"    />
+        <result property="notifyUrl"        column="notify_url"        />
+        <result property="enabled"          column="enabled"           />
+        <result property="createBy"         column="create_by"         />
+        <result property="createByName"     column="create_by_name"    />
+        <result property="createTime"       column="create_time"       />
+        <result property="updateBy"         column="update_by"         />
+        <result property="updateByName"     column="update_by_name"    />
+        <result property="updateTime"       column="update_time"       />
+        <result property="remark"           column="remark"            />
+    </resultMap>
+
+    <sql id="selectPaymentConfigVo">
+        select id, payment_name, payment_type, mch_id, app_id, app_key, public_key, private_key,
+        cert_path, cert_serial_number, private_key_path, private_key_v3, notify_url, enabled,
+        create_by, create_by_name, create_time, update_by, update_by_name, update_time, remark
+        from payment_config
+    </sql>
+
+    <select id="selectPaymentConfigList" parameterType="com.qykj.finmaster.payment.domain.PaymentConfig" resultMap="PaymentConfigResult">
+        <include refid="selectPaymentConfigVo"/>
+        <where>
+            <if test="paymentName != null and paymentName != ''">
+                AND payment_name like concat('%', #{paymentName}, '%')
+            </if>
+            <if test="paymentType != null and paymentType != ''">
+                AND payment_type = #{paymentType}
+            </if>
+            <if test="mchId != null and mchId != ''">
+                AND mch_id = #{mchId}
+            </if>
+            <if test="enabled != null">
+                AND enabled = #{enabled}
+            </if>
+        </where>
+    </select>
+
+    <select id="selectPaymentConfigById" parameterType="Long" resultMap="PaymentConfigResult">
+        <include refid="selectPaymentConfigVo"/>
+        where id = #{id}
+    </select>
+</mapper>

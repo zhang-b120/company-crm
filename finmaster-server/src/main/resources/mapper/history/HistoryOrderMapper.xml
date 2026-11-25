@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.qykj.finmaster.history.mapper.HistoryOrderMapper">
+
+    <resultMap id="HistoryOrderDetailRecordMap"
+               type="com.qykj.finmaster.history.HistoryOrderDetailRecord">
+        <result property="tenantId" column="tenant_id"/>
+        <result property="companyId" column="company_id"/>
+        <result property="businessId" column="business_id"/>
+        <result property="orderDetailType" column="order_detail_type"/>
+        <result property="orderDetailId" column="order_detail_id"/>
+        <result property="orderId" column="order_id"/>
+        <result property="orderNo" column="order_no"/>
+        <result property="effectiveDate" column="effective_date"/>
+        <result property="endDate" column="end_date"/>
+    </resultMap>
+
+    <!--
+        查询需要用于生成历史合同的订单明细：
+        - 仅 NORMAL 正常订单
+        - 仅 PAID 已付款
+        - 仅 NEW / RENEW 明细
+        - 可按 deployTime 限制上线前数据
+    -->
+    <select id="selectHistoryOrderDetails"
+            parameterType="string"
+            resultMap="HistoryOrderDetailRecordMap">
+        SELECT
+            od.tenant_id,
+            od.company_id,
+            od.business_id,
+            od.order_detail_type,
+            od.id          AS order_detail_id,
+            od.order_id    AS order_id,
+            o.order_no,
+            od.effective_date,
+            od.end_date
+        FROM order_details od
+                 JOIN orders o ON od.order_id = o.id
+        WHERE o.order_type = 'NORMAL'
+          AND o.status = 'PAID'
+          AND od.order_detail_type IN ('NEW', 'RENEW')
+          AND od.business_id IS NOT NULL
+          AND od.company_id IS NOT NULL
+          <if test="deployTime != null and deployTime != ''">
+              AND o.create_time &lt;= #{deployTime}
+          </if>
+    </select>
+
+</mapper>
+

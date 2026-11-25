@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.task.mapper.CommonTaskMapper">
+
+    <select id="getCommonTaskPage" resultType="com.qykj.finmaster.task.domain.resp.GetCommonTaskPageResp">
+        SELECT
+            ct.id AS id,
+            ct.tenant_id AS tenantId,
+            st.tenant_name AS tenantName,
+            ct.task_no AS taskNo,
+            ct.service_id AS serviceId,
+            ct.service_name AS serviceName,
+            ct.source_number AS sourceNumber,
+            ct.source_id AS sourceId,
+            ct.customer_id AS customerId,
+            ci.customer_name AS customerName,
+            ct.company_id AS companyId,
+            cc.company_name AS companyName,
+            cc.tax_number AS taxNumber,
+            cc.company_type AS companyType,
+            ct.current_owner_user AS currentOwnerUser,
+            ct.current_owner_user_name AS currentOwnerUserName,
+            ct.owner_user AS ownerUser,
+            ct.owner_user_name AS ownerUserName,
+            ct.create_by AS createBy,
+            ct.create_by_name AS createByName,
+            ct.wish_finish_time AS wishFinishTime,
+            ct.real_finish_time AS realFinishTime,
+            ct.create_time AS createTime,
+            ct.status AS status
+        FROM common_task ct
+            LEFT JOIN customer_company cc ON ct.company_id = cc.id
+            LEFT JOIN customer_info ci ON ct.customer_id = ci.id
+            LEFT JOIN sys_tenant st ON ct.tenant_id = st.id and st.deleted = 0
+        WHERE ct.deleted = 0
+        <if test="params.taskNo != null and params.taskNo != ''">
+            AND ct.task_no like concat('%', #{params.taskNo}, '%')
+        </if>
+        <if test="params.customerName != null and params.customerName != ''">
+            and ci.customer_name like concat('%', #{params.customerName}, '%')
+        </if>
+        <if test="params.companyName != null and params.companyName != ''">
+            AND cc.company_name like concat('%', #{params.companyName}, '%')
+        </if>
+        <if test="params.sourceNumber != null and params.sourceNumber != ''">
+            AND ct.source_number like concat('%', #{params.sourceNumber}, '%')
+        </if>
+        <if test="params.currentOwnerUserName != null and params.currentOwnerUserName != ''">
+            AND ct.current_owner_user_name like concat('%', #{params.currentOwnerUserName}, '%')
+        </if>
+        <if test="params.statusList != null">
+            AND ct.status in
+            <foreach item="item" collection="params.statusList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+        </if>
+        <if test="params.dataScopeUserIds != null">
+            and (
+                ct.create_by in
+                <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+                or ct.owner_user in
+                <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+                or ct.current_owner_user in
+                <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+                or exists(
+                    SELECT 1 FROM common_task_detail ctd
+                    WHERE ctd.task_id = ct.id
+                    AND ctd.owner_user in
+                    <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                        #{item}
+                    </foreach>
+                )
+            )
+        </if>
+        ORDER BY wishFinishTime asc, createTime desc
+    </select>
+
+    <select id="getCommonTaskInfo" parameterType="Long" resultType="com.qykj.finmaster.task.domain.resp.GetCommonTaskInfoResp">
+        SELECT
+        ct.id AS id,
+        ct.task_no AS taskNo,
+        ct.tenant_id AS tenantId,
+        st.tenant_name AS tenantName,
+        ct.service_id AS serviceId,
+        ct.service_name AS serviceName,
+        ct.source_number AS sourceNumber,
+        ct.source_id AS sourceId,
+        ct.customer_id AS customerId,
+        ci.customer_name AS customerName,
+        ct.company_id AS companyId,
+        cc.company_name AS companyName,
+        cc.tax_number AS taxNumber,
+        cc.company_type AS companyType,
+        ct.current_owner_user AS currentOwnerUser,
+        ct.current_owner_user_name AS currentOwnerUserName,
+        ct.owner_user AS ownerUser,
+        ct.owner_user_name AS ownerUserName,
+        ct.create_by AS createBy,
+        ct.create_by_name AS createByName,
+        ct.wish_finish_time AS wishFinishTime,
+        ct.real_finish_time AS realFinishTime,
+        ct.create_time AS createTime,
+        ct.status AS status,
+        ct.remark AS remark,
+        ct.task_data AS taskData,
+        ct.putup_reason AS putUpReason,
+        ct.cancel_reason AS cancelReason
+        FROM common_task ct
+        LEFT JOIN customer_company cc ON ct.company_id = cc.id
+        LEFT JOIN customer_info ci ON ct.customer_id = ci.id
+        LEFT JOIN sys_tenant st ON ct.tenant_id = st.id and st.deleted = 0
+        WHERE ct.deleted = 0 AND ct.id = #{id}
+    </select>
+</mapper>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.system.appletUser.mapper.AppletUserRecommendMapper">
+
+    <select id="getEffectiveUser" resultType="com.qykj.finmaster.system.appletUser.domain.AppletUserRecommend">
+        SELECT DISTINCT
+            saur.recommend_open_id,
+            saur.recommended_open_id,
+            saur.create_time
+        FROM sys_applet_user_recommend  saur
+        WHERE saur.recommend_open_id = #{openId}
+        AND EXISTS (
+            SELECT 1 FROM orders o
+            LEFT JOIN customer_info ci ON ci.id = o.customer_id
+            WHERE o.create_time BETWEEN saur.create_time AND '2025-08-31 23:59:59'
+            AND ci.open_id = saur.recommended_open_id
+            AND o.status = 'PAID' and paid_amount >= 360
+        )
+    </select>
+</mapper>

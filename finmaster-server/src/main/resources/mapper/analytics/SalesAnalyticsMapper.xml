@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.analytics.sales.mapper.SalesAnalyticsMapper">
+
+    <sql id="scopeFilterByCreateBy">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND t.create_by IN
+            <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <!-- 业绩订单过滤：已支付、正常订单（非退款）、按 pay_time 落在区间 -->
+    <sql id="paidOrderFilter">
+        t.status = 'PAID'
+          AND (t.order_type IS NULL OR t.order_type = 'NORMAL')
+          AND t.pay_time IS NOT NULL
+          AND t.pay_time &gt;= #{start}
+          AND t.pay_time &lt;= #{end}
+    </sql>
+
+    <select id="sumOrderAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(t.total_amount), 0)
+        FROM orders t
+        WHERE <include refid="paidOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="countOrders" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM orders t
+        WHERE <include refid="paidOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="countDealCustomers" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT t.customer_id)
+        FROM orders t
+        WHERE <include refid="paidOrderFilter"/>
+          AND t.customer_id IS NOT NULL
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="orderTrendByDay" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.pay_time, '%m-%d') AS label,
+               COALESCE(SUM(t.total_amount), 0) AS value,
+               COUNT(*) AS count
+        FROM orders t
+        WHERE <include refid="paidOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY DATE_FORMAT(t.pay_time, '%m-%d'), DATE(t.pay_time)
+        ORDER BY DATE(t.pay_time)
+    </select>
+
+    <select id="orderTrendByMonth" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.pay_time, '%Y-%m') AS label,
+               COALESCE(SUM(t.total_amount), 0) AS value,
+               COUNT(*) AS count
+        FROM orders t
+        WHERE <include refid="paidOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY DATE_FORMAT(t.pay_time, '%Y-%m')
+        ORDER BY label
+    </select>
+
+    <select id="salesRanking" resultType="com.qykj.finmaster.analytics.sales.dto.SalesPerformanceResp$RankItem">
+        SELECT
+            t.create_by AS username,
+            COALESCE(su.real_name, t.create_by_name, t.create_by) AS realName,
+            COUNT(*) AS orderCount,
+            COALESCE(SUM(t.total_amount), 0) AS orderAmount
+        FROM orders t
+        LEFT JOIN sys_user su ON su.username = t.create_by AND su.deleted = 0
+        WHERE <include refid="paidOrderFilter"/>
+          AND t.create_by IS NOT NULL
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY t.create_by, realName
+        ORDER BY orderAmount DESC
+    </select>
+
+    <select id="salesAmountOfUser" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(t.total_amount), 0)
+        FROM orders t
+        WHERE t.status = 'PAID'
+          AND (t.order_type IS NULL OR t.order_type = 'NORMAL')
+          AND t.pay_time IS NOT NULL
+          AND t.pay_time &gt;= #{start}
+          AND t.pay_time &lt;= #{end}
+          AND t.create_by = #{username}
+          <if test="tenantId != null">
+              AND t.tenant_id = #{tenantId}
+          </if>
+    </select>
+
+    <!--
+        部门业绩：每个用户可能属多部门，取 MIN(department_id) 作为主部门，
+        保证每条订单只归属一个部门，避免重复计数导致部门合计 > 公司总量。
+    -->
+    <select id="deptStats" resultType="com.qykj.finmaster.analytics.sales.dto.SalesPerformanceResp$DeptStat">
+        SELECT
+            d.id AS deptId,
+            d.name AS deptName,
+            COUNT(t.id) AS orderCount,
+            COALESCE(SUM(t.total_amount), 0) AS orderAmount
+        FROM sys_department d
+        LEFT JOIN (
+            SELECT user_id, MIN(department_id) AS primary_dept_id
+            FROM sys_user_department
+            WHERE deleted = 0
+            GROUP BY user_id
+        ) ud ON ud.primary_dept_id = d.id
+        LEFT JOIN sys_user u ON u.id = ud.user_id AND u.deleted = 0
+        LEFT JOIN orders t
+            ON t.create_by = u.username
+            AND t.status = 'PAID'
+            AND (t.order_type IS NULL OR t.order_type = 'NORMAL')
+            AND t.pay_time IS NOT NULL
+            AND t.pay_time &gt;= #{start}
+            AND t.pay_time &lt;= #{end}
+            <if test="ctx.tenantId != null">
+                AND t.tenant_id = #{ctx.tenantId}
+            </if>
+        WHERE d.deleted = 0
+          <if test="ctx.tenantId != null">
+              AND d.tenant_id = #{ctx.tenantId}
+          </if>
+        GROUP BY d.id, d.name
+        HAVING orderCount &gt; 0 OR orderAmount &gt; 0
+        ORDER BY orderAmount DESC
+    </select>
+
+</mapper>

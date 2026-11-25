@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.system.role.mapper.RoleDataScopeMapper">
+
+    <!-- 根据角色ID查询数据权限 -->
+    <select id="findByRoleId" resultType="com.qykj.finmaster.system.role.entity.RoleDataScope">
+        SELECT *
+        FROM sys_role_data_scope
+        WHERE role_id = #{roleId}
+          AND deleted = 0
+    </select>
+
+    <!-- 插入或更新数据权限 -->
+    <insert id="insertOrUpdate">
+        INSERT INTO sys_role_data_scope (role_id, data_scope, dept_ids, create_time, update_time)
+        VALUES (#{roleId}, #{dataScope}, #{deptIds}, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE
+            data_scope = #{dataScope},
+            dept_ids = #{deptIds},
+            update_time = NOW()
+    </insert>
+
+    <delete id="deleteByRoleId">
+        DELETE FROM sys_role_data_scope
+        WHERE role_id = #{roleId}
+    </delete>
+    <insert id="insertRoleDataScope">
+        INSERT INTO sys_role_data_scope (role_id, data_scope, dept_ids, deleted, create_time, update_time)
+        VALUES (#{roleId}, #{dataScope}, #{deptIds}, 0, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE
+            data_scope = #{dataScope},
+            dept_ids = #{deptIds},
+            update_time = NOW()
+    </insert>
+    <!-- 根据用户ID获取用户有权限的部门 -->
+    <select id="getDataScopeDeptsByUserId" resultType="String">
+        SELECT rds.dept_ids
+        FROM sys_role_data_scope rds
+                 INNER JOIN sys_user_role ur ON rds.role_id = ur.role_id
+        WHERE ur.user_id = #{userId} AND ur.deleted = 0
+    </select>
+    <!-- 根据用户ID获取数据权限 -->
+    <select id="getDataScopeByUserId" resultType="Long">
+        SELECT rds.data_scope
+        FROM sys_role_data_scope rds
+                 INNER JOIN sys_user_role ur ON rds.role_id = ur.role_id
+        WHERE ur.user_id = #{userId} AND ur.deleted = 0
+    </select>
+</mapper>

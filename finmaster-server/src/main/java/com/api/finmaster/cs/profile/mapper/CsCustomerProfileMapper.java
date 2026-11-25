@@ -1,0 +1,9 @@
+package com.qykj.finmaster.cs.profile.mapper;
+
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.qykj.finmaster.cs.profile.domain.CsCustomerProfile;
+import org.apache.ibatis.annotations.Mapper;
+
+@Mapper
+public interface CsCustomerProfileMapper extends BaseMapper<CsCustomerProfile> {
+}

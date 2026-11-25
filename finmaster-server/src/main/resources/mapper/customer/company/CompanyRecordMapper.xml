@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.customer.company.mapper.CompanyRecordMapper">
+
+    <select id="getCompanyRecordHistoryPage"
+            resultType="com.qykj.finmaster.customer.company.domain.resp.GetCompanyRecordHistoryPageResp">
+        SELECT cr.id               AS id,
+               cr.follow_type      AS followType,
+               cr.next_follow_time AS nextFollowTime,
+               cr.follow_time      AS followTime,
+               cr.follow_content   AS followContent,
+               cr.importance       AS importance,
+               cr.remark           AS remark
+        FROM company_record cr
+        WHERE cr.deleted = 0 AND cr.company_id = #{params.companyId}
+        ORDER BY cr.id DESC
+    </select>
+</mapper>

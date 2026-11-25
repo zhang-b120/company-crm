@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.system.serviceMaintenance.mapper.ServiceMaintenanceMapper">
+    <select id="getServiceMaintenanceList"
+            resultType="com.qykj.finmaster.system.serviceMaintenance.domain.resp.GetServiceMaintenanceListResp">
+        SELECT
+        id AS id,
+        service_name AS serviceName,
+        owner_user AS ownerUser,
+        owner_user_name AS ownerUserName,
+        cross_tenantis_allowed AS crossTenantIsAllowed,
+        description AS description,
+        maintenance_filed AS maintenanceFiled
+        FROM service_maintenance
+        WHERE deleted = 0
+        <if test="params.id != null and params.id != ''" >
+            AND id = #{params.id}
+        </if>
+        <if test="params.serviceName != null and params.serviceName != ''">
+            AND service_name LIKE CONCAT('%', #{params.serviceName}, '%')
+        </if>
+        <if test="params.ownerUserName != null and params.ownerUserName !=''">
+            AND owner_user_name LIKE CONCAT('%', #{params.ownerUserName}, '%')
+        </if>
+        <if test="params.businessId != null">
+            AND EXISTS (SELECT 1 FROM service_business sb WHERE sb.service_id = service_maintenance.id AND sb.business_id = #{params.businessId})
+        </if>
+    </select>
+    <select id="getServiceByProductId"
+            resultType="com.qykj.finmaster.system.serviceMaintenance.domain.ServiceMaintenance">
+        SELECT DISTINCT
+            sm.id AS id,
+            sm.service_name AS serviceName,
+            sm.owner_user AS ownerUser,
+            sm.owner_user_name AS ownerUserName,
+            sm.cross_tenantis_allowed AS crossTenantIsAllowed,
+            sm.description AS description,
+            sm.maintenance_filed AS maintenanceFiled
+        FROM service_maintenance sm
+        INNER JOIN service_business sb ON sm.id = sb.service_id
+        INNER JOIN sys_business_product sbp ON sb.business_id = sbp.business_id AND sbp.deleted = 0
+        WHERE sm.deleted = 0 AND sbp.product_id = #{productId}
+        LIMIT 1
+    </select>
+</mapper>

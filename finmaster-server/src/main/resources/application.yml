@@ -1,0 +1,80 @@
+server:
+  port: 8090
+
+spring:
+  config:
+    import: optional:classpath:application-local.yml
+  datasource:
+    url: jdbc:mysql://150.139.141.142:3306/finmaster?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8
+    username: qy
+    password: qykj@123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    type: com.alibaba.druid.pool.DruidDataSource
+    druid:
+      initial-size: 5
+      min-idle: 5
+      max-active: 20
+      max-wait: 60000
+      time-between-eviction-runs-millis: 60000
+      min-evictable-idle-time-millis: 300000
+      validation-query: SELECT 1
+      test-while-idle: true
+      test-on-borrow: false
+      test-on-return: false
+      pool-prepared-statements: true
+      max-pool-prepared-statement-per-connection-size: 20
+      filters: stat,wall
+      connection-properties: druid.stat.mergeSql=true;druid.stat.slowSqlMillis=5000
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+  main:
+    allow-bean-definition-overriding: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # 首次启用：库里已经跑过 V2.0.18 之前的脚本（我们的起点从 V2.0.19 开始）
+    baseline-on-migrate: true
+    baseline-version: 2.0.18
+    # 允许历史版本之间出现空缺（V2.0.24/25 等）
+    out-of-order: false
+    # 历史脚本被改过时不校验 checksum（幂等改造期间必开）
+    validate-on-migrate: false
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+      enabled: true
+
+logging:
+  level:
+    com.qykj.finmaster: debug
+    # SQL 报错才输出（JDBC 异常仍会从 Spring 异常栈输出完整 SQL/参数），正常的 SELECT/UPDATE 不再刷屏
+    org.apache.ibatis: error
+    com.baomidou.mybatisplus: error
+    org.mybatis: error
+
+third:
+  deepseek:
+    api-key: sk-decb4aae66e041f39522488dc9c6b727
+    api-url: https://api.deepseek.com/chat/completions
+
+app:
+  jwt:
+    secret: qykj-finmaster-jwt-secret-key-2024-must-be-secure
+    expiration: 86400000
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.qykj.finmaster.**.domain,com.qykj.finmaster.**.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    # 改用 slf4j：受 logging.level 控制；正常 SQL 不输出，仅出错时打印完整堆栈
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+    cache-enabled: false
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0

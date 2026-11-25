@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.invoice.mapper.InvoiceApplyMapper">
+
+    <resultMap id="getInvoiceApplyList_Map" type="com.qykj.finmaster.invoice.domain.resp.GetInvoiceApplyListResp">
+        <result column="id" property="id"/>
+        <result column="companyId" property="companyId"/>
+        <result column="customerId" property="customerId"/>
+        <result column="saleCompanyName" property="saleCompanyName"/>
+        <result column="saleTaxNumber" property="saleTaxNumber"/>
+        <result column="saleBankName" property="saleBankName"/>
+        <result column="saleBankAccount" property="saleBankAccount"/>
+        <result column="saleTelephone" property="saleTelephone"/>
+        <result column="saleAddress" property="saleAddress"/>
+        <result column="buyerCompanyName" property="buyerCompanyName"/>
+        <result column="buyerTaxNumber" property="buyerTaxNumber"/>
+        <result column="buyerBankAccount" property="buyerBankAccount"/>
+        <result column="buyerBankName" property="buyerBankName"/>
+        <result column="buyerTelephone" property="buyerTelephone"/>
+        <result column="buyerAddress" property="buyerAddress"/>
+        <result column="buyerType" property="buyerType"/>
+        <result column="invoiceType" property="invoiceType"/>
+        <result column="isArchitecture" property="isArchitecture"/>
+        <result column="isTransProvince" property="isTransProvince"/>
+        <result column="productLocation" property="productLocation"/>
+        <result column="invoiceTitleId" property="invoiceTitleId"/>
+        <result column="status" property="status"/>
+        <result column="invoiceUrl" property="invoiceUrl"/>
+        <result column="remark" property="remark"/>
+        <collection property="detailInfoList" column="{invoice_apply_id = id}" select="getInvoiceApplyDetailList"></collection>
+    </resultMap>
+    <select id="getInvoiceApplyDetailList" resultType="com.qykj.finmaster.invoice.domain.dto.InvoiceApplyDetailInfo">
+        select
+            iad.id,
+            iad.company_id as companyId,
+            iad.invoice_apply_id as invoiceApplyId,
+            iad.tax_product_name as taxProductName,
+            iad.num,
+            iad.unit_price as unitPrice,
+            iad.unit,
+            iad.spec,
+            iad.tax_rate as taxRate,
+            iad.amount
+        from invoice_apply_detail iad
+        where iad.deleted = 0 and invoice_apply_id = #{invoice_apply_id}
+    </select>
+    <select id="getInvoiceApplyList" resultMap="getInvoiceApplyList_Map">
+        select ia.id as id,
+            ia.company_id as companyId,
+            ia.customer_id as customerId,
+            it.company_name as saleCompanyName,
+            it.tax_number as saleTaxNumber,
+            it.bank_name as saleBankName,
+            it.bank_account as saleBankAccount,
+            it.telephone as saleTelephone,
+            it.address as saleAddress,
+            ia.buyer_company_name as buyerCompanyName,
+            ia.buyer_tax_number as buyerTaxNumber,
+            ia.buyer_bank_name as buyerBankName,
+            ia.buyer_bank_account as buyerBankAccount,
+            ia.buyer_telephone as buyerTelephone,
+            ia.buyer_address as buyerAddress,
+            ia.buyer_type as buyerType,
+            ia.invoice_type as invoiceType,
+            ia.is_architecture as isArchitecture,
+            ia.is_trans_province as isTransProvince,
+            ia.product_location as productLocation,
+            ia.invoice_title_id as invoiceTitleId,
+            ia.status as status,
+            ia.invoice_url as invoiceUrl,
+            ia.remark as remark,
+            ia.create_time as createTime
+        from invoice_apply ia
+        left join invoice_title it on ia.invoice_title_id = it.id
+        where ia.deleted = 0
+        <if test="params.companyId != '' and params.companyId != null">
+            and ia.company_id = #{params.companyId}
+        </if>
+        <if test="params.buyerCompanyName != '' and params.buyerCompanyName != null">
+            and ia.buyer_company_name like concat('%', #{params.buyerCompanyName}, '%')
+        </if>
+        <if test="params.startDate != null">
+            AND DATE_FORMAT(ia.create_time, '%Y-%m-%d') >= #{params.startDate}
+        </if>
+        <if test="params.endDate != null">
+            AND DATE_FORMAT(ia.create_time, '%Y-%m-%d') &lt;= #{params.endDate}
+        </if>
+        order by createTime desc
+    </select>
+
+    <resultMap id="getInvoiceApplyPageList_Map" type="com.qykj.finmaster.invoice.domain.resp.GetInvoiceApplyPageListResp">
+        <result column="id" property="id"/>
+        <result column="companyName" property="companyName"/>
+        <result column="customerName" property="customerName"/>
+        <result column="saleCompanyName" property="saleCompanyName"/>
+        <result column="saleTaxNumber" property="saleTaxNumber"/>
+        <result column="saleBankName" property="saleBankName"/>
+        <result column="saleBankAccount" property="saleBankAccount"/>
+        <result column="saleTelephone" property="saleTelephone"/>
+        <result column="saleAddress" property="saleAddress"/>
+        <result column="buyerCompanyName" property="buyerCompanyName"/>
+        <result column="buyerTaxNumber" property="buyerTaxNumber"/>
+        <result column="buyerBankAccount" property="buyerBankAccount"/>
+        <result column="buyerBankName" property="buyerBankName"/>
+        <result column="buyerTelephone" property="buyerTelephone"/>
+        <result column="buyerAddress" property="buyerAddress"/>
+        <result column="buyerType" property="buyerType"/>
+        <result column="invoiceType" property="invoiceType"/>
+        <result column="isArchitecture" property="isArchitecture"/>
+        <result column="isTransProvince" property="isTransProvince"/>
+        <result column="productLocation" property="productLocation"/>
+        <result column="invoiceTitleId" property="invoiceTitleId"/>
+        <result column="status" property="status"/>
+        <result column="invoiceUrl" property="invoiceUrl"/>
+        <result column="remark" property="remark"/>
+        <result column="createTime" property="createTime"/>
+        <collection property="detailInfoList" column="{invoice_apply_id = id}" select="getInvoiceApplyDetailList"></collection>
+    </resultMap>
+    <select id="getInvoiceApplyPageList" resultMap="getInvoiceApplyPageList_Map">
+        select ia.id as id,
+            cc.company_name as companyName,
+            ci.customer_name as customerName,
+            it.company_name as saleCompanyName,
+            it.tax_number as saleTaxNumber,
+            it.bank_name as saleBankName,
+            it.bank_account as saleBankAccount,
+            it.telephone as saleTelephone,
+            it.address as saleAddress,
+            ia.buyer_company_name as buyerCompanyName,
+            ia.buyer_tax_number as buyerTaxNumber,
+            ia.buyer_bank_name as buyerBankName,
+            ia.buyer_bank_account as buyerBankAccount,
+            ia.buyer_telephone as buyerTelephone,
+            ia.buyer_address as buyerAddress,
+            ia.buyer_type as buyerType,
+            ia.invoice_type as invoiceType,
+            ia.is_architecture as isArchitecture,
+            ia.is_trans_province as isTransProvince,
+            ia.product_location as productLocation,
+            ia.invoice_title_id as invoiceTitleId,
+            ia.status as status,
+            ia.invoice_url as invoiceUrl,
+            ia.remark as remark,
+            ia.create_time as createTime
+        from invoice_apply ia
+        left join invoice_title it on ia.invoice_title_id = it.id
+        left join customer_company cc on ia.company_id = cc.id
+        left join customer_info ci on ia.customer_id = ci.id
+        where ia.deleted = 0
+        <if test="params.companyName != '' and params.companyName != null">
+            and cc.company_name like concat('%', #{params.companyName}, '%')
+        </if>
+        <if test="params.customerName != '' and params.customerName != null">
+            and ci.customer_name like concat('%', #{params.customerName}, '%')
+        </if>
+        <if test="params.status != '' and params.status != null">
+            and ia.status = #{params.status}
+        </if>
+        <if test="params.buyerCompanyName != '' and params.buyerCompanyName != null">
+            and ia.buyer_company_name like concat('%', #{params.buyerCompanyName}, '%')
+        </if>
+        <if test="params.startDate != null">
+            AND DATE_FORMAT(ia.create_time, '%Y-%m-%d') >= #{params.startDate}
+        </if>
+        <if test="params.endDate != null">
+            AND DATE_FORMAT(ia.create_time, '%Y-%m-%d') &lt;= #{params.endDate}
+        </if>
+        <if test="params.dataScopeUserIds != null and params.dataScopeUserIds.size() > 0 ">
+            and (ci.create_by in
+            <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            or ci.owner_user in
+            <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            )
+        </if>
+        order by createTime desc
+    </select>
+</mapper> 

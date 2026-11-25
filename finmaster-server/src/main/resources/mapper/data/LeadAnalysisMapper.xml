@@ -1,0 +1,375 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.data.mapper.LeadAnalysisMapper">
+    <select id="getDepartmentUser" resultType="com.qykj.finmaster.system.user.entity.User">
+        SELECT
+            su.username AS username,
+            su.real_name AS realName
+        FROM sys_user_department sud
+        LEFT JOIN sys_user su ON sud.user_id = su.id AND su.deleted = 0
+        WHERE sud.deleted = 0 AND su.username IS NOT NULL
+        AND su.enabled = 1
+        AND sud.department_id = #{departmentId}
+    </select>
+    <select id="getOrderDetailData" resultType="com.qykj.finmaster.order.domain.dto.GetOrderDetailDataDTO">
+        SELECT
+            o.order_no AS orderNo,
+            od.id AS orderDetailId,
+            od.unit_price * od.quantity AS amount,
+            o.create_time AS createTime,
+            IFNULL(ci.owner_user, ci.create_by) AS ownerUser
+        FROM order_details od
+                 LEFT JOIN orders o ON od.order_id = o.id
+                 LEFT JOIN customer_info ci ON o.customer_id = ci.id
+        WHERE 1=1
+            AND o.status = 'PAID'
+        <if test="params.userNameList != null">
+            AND (ci.create_by IN
+            <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            OR ci.owner_user IN
+            <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            )
+        </if>
+    </select>
+    <select id="getAppletUserData"
+            resultType="com.qykj.finmaster.system.appletUser.domain.dto.GetAppletUserDataDTO">
+        SELECT
+            IFNULL(sl.owner_user, sl.create_by) AS ownerUser,
+            sau.username AS userName,
+            sau.create_time AS createTime
+        FROM sys_applet_user sau
+        INNER JOIN sale_lead sl ON sl.open_id = sau.open_id
+        WHERE sau.deleted = 0
+        <if test="params.userNameList != null">
+            AND (sl.create_by IN
+            <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            OR sl.owner_user IN
+            <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            )
+        </if>
+    </select>
+    <select id="getLeadData" resultType="com.qykj.finmaster.customer.lead.entity.dto.GetLeadDataDTO">
+        SELECT
+            sl.owner_user AS ownerUser,
+            sl.create_by AS createBy,
+            sl.create_time AS createTime
+        FROM sale_lead sl
+        WHERE sl.deleted = 0
+        <if test="params.userNameList != null">
+            AND (sl.create_by IN
+            <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            OR sl.owner_user IN
+            <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            )
+        </if>
+    </select>
+    <select id="getPromotionLeadData" resultType="com.qykj.finmaster.customer.lead.entity.dto.GetLeadDataDTO">
+        SELECT
+            sl.id AS id,
+            sl.create_by AS createBy,
+            sl.create_time AS createTime,
+            sl.is_valid AS isValid
+        FROM sale_lead sl
+        WHERE sl.deleted = 0
+        <if test="params.userNameList != null">
+            AND sl.create_by IN
+            <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+        </if>
+        <if test="params.start != null">
+            AND sl.create_time >= #{params.start}
+        </if>
+        <if test="params.end != null">
+            AND sl.create_time &lt;= #{params.end}
+        </if>
+    </select>
+    <select id="getPromotionOrderDetailData"
+            resultType="com.qykj.finmaster.order.domain.dto.GetOrderDetailDataDTO">
+        SELECT
+            o.order_no AS orderNo,
+            od.id AS orderDetailId,
+            od.unit_price * od.quantity AS amount,
+            o.create_time AS createTime,
+            sl.create_by AS ownerUser
+        FROM order_details od
+        LEFT JOIN orders o ON od.order_id = o.id
+        LEFT JOIN customer_info ci ON o.customer_id = ci.id
+        LEFT JOIN sale_lead sl on ci.lead_id = sl.id
+        WHERE 1=1
+            AND o.status = 'PAID'
+        <if test="params.userNameList != null">
+            AND sl.create_by IN
+            <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+        </if>
+        <if test="params.start != null">
+            AND od.create_time >= #{params.start}
+        </if>
+        <if test="params.end != null">
+            AND od.create_time &lt;= #{params.end}
+        </if>
+
+    </select>
+
+    <select id="getSaleAllLeadList" resultType="com.qykj.finmaster.data.domain.dto.SaleLeadOrCustomerDataDto">
+        SELECT
+            a.ownerUser,
+            count(a.leadId) AS count
+        FROM
+        (
+            SELECT
+                IFNULL(sl.owner_user, sl.create_by) AS ownerUser,
+                sl.id as leadId
+            FROM sale_lead sl
+            WHERE sl.deleted = 0
+            <if test="params.tenantId != null">
+                AND sl.tenant_id = #{params.tenantId}
+            </if>
+            <if test="params.userNameList != null">
+                AND COALESCE(NULLIF(sl.owner_user, ''), sl.create_by) IN
+                <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="params.source != null and params.source != ''">
+                AND sl.source = #{params.source}
+            </if>
+            <if test="params.start != null">
+                AND sl.create_time >= #{params.start}
+            </if>
+            <if test="params.end != null">
+                AND sl.create_time &lt;= #{params.end}
+            </if>
+        ) a
+        GROUP BY a.ownerUser
+    </select>
+
+    <select id="getSaleTransactionLeadList" resultType="com.qykj.finmaster.data.domain.dto.SaleLeadOrCustomerDataDto">
+        SELECT
+            a.ownerUser,
+            count(a.leadId) AS count
+        FROM
+        (
+            SELECT
+                IFNULL(sl.owner_user, sl.create_by) AS ownerUser,
+                sl.id as leadId
+            FROM sale_lead sl
+            LEFT JOIN customer_info ci ON ci.lead_id = sl.id
+            WHERE 1=1
+            AND sl.deleted = 0
+            AND EXISTS (
+            SELECT 1 FROM customer_company cc
+            WHERE cc.customer_id = ci.id AND ( cc.is_verify_tax = 1 OR cc.is_invoicing = 1)
+            )
+            AND EXISTS (
+            SELECT 1 FROM orders o
+            WHERE o.customer_id = ci.id AND o.status = 'PAID' AND o.order_type = 'NORMAL'
+            )
+            <if test="params.tenantId != null">AND sl.tenant_id = #{params.tenantId}
+            </if>
+            <if test="params.userNameList != null">
+                AND COALESCE(NULLIF(sl.owner_user, ''), sl.create_by) IN
+                <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="params.source != null and params.source != ''">
+                AND sl.source = #{params.source}
+            </if>
+            <if test="params.start != null">
+                AND sl.create_time >= #{params.start}
+            </if>
+            <if test="params.end != null">
+                AND sl.create_time &lt;= #{params.end}
+            </if>
+        ) a
+        GROUP BY a.ownerUser
+    </select>
+
+    <select id="getSaleAllCustomerList" resultType="com.qykj.finmaster.data.domain.dto.SaleLeadOrCustomerDataDto">
+        SELECT
+            ci.owner_user AS ownerUser,
+            count(ci.id) AS count
+        FROM customer_info ci
+        WHERE ci.customer_type = 1
+        <if test="params.tenantId != null">
+            AND ci.tenant_id = #{params.tenantId}
+        </if>
+        <if test="params.userNameList != null">
+            AND COALESCE(NULLIF(ci.owner_user, ''), ci.create_by) IN
+            <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+        </if>
+        <if test="params.source != null and params.source != ''">
+            AND ci.source = #{params.source}
+        </if>
+        <if test="params.start != null">
+            AND ci.create_time >= #{params.start}
+        </if>
+        <if test="params.end != null">
+            AND ci.create_time &lt;= #{params.end}
+        </if>
+        GROUP BY ci.owner_user
+    </select>
+
+    <select id="getSaleTransactionCustomerList" resultType="com.qykj.finmaster.data.domain.dto.SaleLeadOrCustomerDataDto">
+        SELECT
+            ci.owner_user AS ownerUser,
+            count(ci.id) AS count
+        FROM customer_info ci
+        WHERE ci.customer_type = 1
+        AND EXISTS (
+            SELECT 1 FROM customer_company cc
+            WHERE cc.customer_id = ci.id AND ( cc.is_verify_tax = 1 OR cc.is_invoicing = 1)
+        )
+        AND EXISTS (
+            SELECT 1 FROM orders o
+            WHERE o.customer_id = ci.id AND o.status = 'PAID' AND o.order_type = 'NORMAL'
+        )
+        <if test="params.tenantId != null">
+            AND ci.tenant_id = #{params.tenantId}
+        </if>
+        <if test="params.userNameList != null">
+            AND COALESCE(NULLIF(ci.owner_user, ''), ci.create_by) IN
+            <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+        </if>
+        <if test="params.source != null and params.source != ''">
+            AND ci.source = #{params.source}
+        </if>
+        <if test="params.start != null">
+            AND ci.create_time >= #{params.start}
+        </if>
+        <if test="params.end != null">
+            AND ci.create_time &lt;= #{params.end}
+        </if>
+        GROUP BY ci.owner_user
+    </select>
+
+    <select id="getSaleOrderList" resultType="com.qykj.finmaster.data.domain.dto.SaleOrderDataDto">
+        SELECT
+            a.ownerUser AS ownerUser,
+            -- 全部数据
+            SUM( a.unitPrice * a.quantity) AS allPayment,
+            count(a.orderDetailId) AS allCount,
+            -- 本年度
+            SUM(CASE WHEN a.payTime >= #{params.yearStart}
+            AND a.payTime &lt;= #{params.yearEnd}
+            THEN a.unitPrice * a.quantity ELSE 0 END) AS yearPayment,
+            SUM(CASE WHEN a.payTime >= #{params.yearStart}
+            AND a.payTime &lt;= #{params.yearEnd}
+            THEN 1 ELSE 0 END) AS yearCount,
+            -- 本季度
+            SUM(CASE WHEN a.payTime >= #{params.quarterStart}
+            AND a.payTime &lt;= #{params.quarterEnd}
+            THEN a.unitPrice * a.quantity ELSE 0 END) AS quarterPayment,
+            SUM(CASE WHEN a.payTime >= #{params.quarterStart}
+            AND a.payTime &lt;= #{params.quarterEnd}
+            THEN 1 ELSE 0 END) AS quarterCount,
+            -- 上月
+            SUM(CASE WHEN a.payTime >= #{params.lastMonthStart}
+            AND a.payTime &lt;= #{params.lastMonthEnd}
+            THEN a.unitPrice * a.quantity ELSE 0 END) AS lastMonthPayment,
+            SUM(CASE WHEN a.payTime >= #{params.lastMonthStart}
+            AND a.payTime &lt;= #{params.lastMonthEnd}
+            THEN 1 ELSE 0 END) AS lastMonthCount,
+            -- 本月
+            SUM(CASE WHEN a.payTime >= #{params.monthStart}
+            AND a.payTime &lt;= #{params.monthEnd}
+            THEN a.unitPrice * a.quantity ELSE 0 END) AS monthPayment,
+            SUM(CASE WHEN a.payTime >= #{params.monthStart}
+            AND a.payTime &lt;= #{params.monthEnd}
+            THEN 1 ELSE 0 END) AS monthCount,
+            -- 今日数据（2025-12-15）
+            SUM(CASE WHEN DATE(a.payTime) = #{params.today}
+            THEN a.unitPrice * a.quantity ELSE 0 END) AS todayPayment,
+            SUM(CASE WHEN DATE(a.payTime) = #{params.today}
+            THEN 1 ELSE 0 END) AS todayCount,
+            -- 昨日数据（2025-12-14）
+            SUM(CASE WHEN DATE(a.payTime) = #{params.yesterday}
+            THEN a.unitPrice * a.quantity ELSE 0 END) AS yesterdayPayment,
+            SUM(CASE WHEN DATE(a.payTime) = #{params.yesterday}
+            THEN 1 ELSE 0 END) AS yesterdayCount
+        FROM (
+            SELECT
+                IFNULL(ci.owner_user, ci.create_by) AS ownerUser,
+                od.id AS orderDetailId,
+                od.unit_price AS unitPrice,
+                od.quantity AS quantity,
+                o.pay_time AS payTime
+            FROM order_details od
+            LEFT JOIN orders o ON od.order_id = o.id
+            LEFT JOIN customer_info ci ON o.customer_id = ci.id
+            WHERE 1=1
+            AND o.order_type = 'NORMAL'
+            AND o.status = 'PAID'
+            AND od.product_id NOT IN (38)
+            <if test="params.tenantId != null">
+                AND ci.tenant_id = #{params.tenantId}
+            </if>
+            <if test="params.userNameList != null">
+                AND COALESCE(NULLIF(ci.owner_user, ''), ci.create_by) IN
+                <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+            </if>
+        ) a
+        GROUP BY a.ownerUser
+    </select>
+    <select id="getSalesAllOrderByLead"
+            resultType="com.qykj.finmaster.data.domain.dto.SaleLeadOrCustomerDataDto">
+        SELECT
+            a.ownerUser,
+            count(orderDetailId) AS count
+        FROM (
+            SELECT
+                IFNULL(sl.owner_user, sl.create_by) AS ownerUser,
+                od.id as orderDetailId
+            FROM sale_lead sl
+            INNER JOIN customer_info ci ON ci.lead_id = sl.id
+            LEFT JOIN orders o ON o.customer_id = ci.id
+            LEFT JOIN order_details od ON od.order_id = o.id
+            WHERE sl.deleted = 0
+            AND o.order_type = 'NORMAL'
+            AND o.status = 'PAID'
+            AND od.product_id NOT IN (38)
+            <if test="params.tenantId != null">
+                AND sl.tenant_id = #{params.tenantId}
+            </if>
+            <if test="params.userNameList != null">
+                AND COALESCE(NULLIF(sl.owner_user, ''), sl.create_by) IN
+                <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="params.source != null and params.source != ''">
+                AND sl.source = #{params.source}
+            </if>
+            <if test="params.start != null">
+                AND sl.create_time >= #{params.start}
+            </if>
+            <if test="params.end != null">
+                AND sl.create_time &lt;= #{params.end}
+            </if>
+        ) a
+        GROUP BY a.ownerUser
+    </select>
+</mapper>

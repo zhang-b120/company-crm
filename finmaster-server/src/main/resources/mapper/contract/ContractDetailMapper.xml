@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.contract.mapper.ContractDetailMapper">
+
+    <resultMap id="ContractDetailResult" type="com.qykj.finmaster.contract.domain.resp.ContractDetailInfoResp">
+        <id     property="id"                column="id"/>
+        <result property="contractId"        column="contract_id"/>
+        <result property="orderNo"           column="order_no"/>
+        <result property="orderDetailId"     column="order_detail_id"/>
+        <result property="productId"         column="product_id"/>
+        <result property="productName"      column="product_name"/>
+        <result property="productNumber"    column="product_number"/>
+        <result property="companyAddressId"  column="company_address_id"/>
+        <result property="address"          column="address"/>
+        <result property="remark"           column="remark"/>
+    </resultMap>
+
+</mapper>

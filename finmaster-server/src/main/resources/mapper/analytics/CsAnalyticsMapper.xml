@@ -1,0 +1,331 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.analytics.cs.mapper.CsAnalyticsMapper">
+
+    <!--
+        CS scope 过滤通过 butler_owner_user（管家） 实现。
+        由于 company_service 无 tenant_id 字段，租户过滤通过 customer_info 关联。
+    -->
+    <sql id="csScopeFilter">
+        <if test="ctx.tenantId != null">
+            AND EXISTS (
+                SELECT 1 FROM customer_info ci
+                WHERE ci.id = t.customer_id AND ci.tenant_id = #{ctx.tenantId}
+            )
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND t.butler_owner_user IN
+            <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <!-- Task scope 过滤（计数类）：匹配 owner_user 或 current_owner_user 任一在范围内 -->
+    <sql id="taskScopeFilter">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND (t.owner_user IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                OR t.current_owner_user IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+            )
+        </if>
+    </sql>
+
+    <!--
+        Task scope 过滤（排行类）：只按最终责任人（COALESCE(current, initial)）过滤，
+        与 taskOwnerRanking 的 GROUP BY 表达式保持一致，避免同一任务因 owner/current_owner
+        均在范围内而拆行计数。
+    -->
+    <sql id="taskOwnerScopeFilter">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND COALESCE(t.current_owner_user, t.owner_user) IN
+            <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <!-- ===== Renewal ===== -->
+
+    <select id="countExpiring" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM company_service t
+        WHERE t.deleted = 0
+          AND t.end_date IS NOT NULL
+          AND t.end_date &gt;= #{start}
+          AND t.end_date &lt;= #{end}
+        <include refid="csScopeFilter"/>
+    </select>
+
+    <select id="countRenewed" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT t.id) FROM company_service t
+        INNER JOIN company_service_renew csr
+            ON csr.company_service_id = t.id
+            AND csr.deleted = 0
+            AND csr.renew_type IN (0, 1, 2)
+        WHERE t.deleted = 0
+          AND t.end_date IS NOT NULL
+          AND t.end_date &gt;= #{start}
+          AND t.end_date &lt;= #{end}
+        <include refid="csScopeFilter"/>
+    </select>
+
+    <select id="countNotRenewed" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT t.id) FROM company_service t
+        INNER JOIN company_service_renew csr
+            ON csr.company_service_id = t.id
+            AND csr.deleted = 0
+            AND csr.renew_type = 3
+        WHERE t.deleted = 0
+          AND t.end_date IS NOT NULL
+          AND t.end_date &gt;= #{start}
+          AND t.end_date &lt;= #{end}
+        <include refid="csScopeFilter"/>
+    </select>
+
+    <select id="sumRenewAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(csr.renew_amount), 0)
+        FROM company_service t
+        INNER JOIN company_service_renew csr
+            ON csr.company_service_id = t.id
+            AND csr.deleted = 0
+            AND csr.renew_type IN (0, 1, 2)
+        WHERE t.deleted = 0
+          AND t.end_date IS NOT NULL
+          AND t.end_date &gt;= #{start}
+          AND t.end_date &lt;= #{end}
+        <include refid="csScopeFilter"/>
+    </select>
+
+    <select id="renewTypeDist" resultType="com.qykj.finmaster.analytics.cs.dto.CsAnalyticsResp$RenewTypeItem">
+        SELECT
+            csr.renew_type AS type,
+            csr.renew_type AS typeLabel,
+            COUNT(*) AS count,
+            COALESCE(SUM(csr.renew_amount), 0) AS amount
+        FROM company_service t
+        INNER JOIN company_service_renew csr ON csr.company_service_id = t.id AND csr.deleted = 0
+        WHERE t.deleted = 0
+          AND t.end_date IS NOT NULL
+          AND t.end_date &gt;= #{start}
+          AND t.end_date &lt;= #{end}
+        <include refid="csScopeFilter"/>
+        GROUP BY csr.renew_type
+    </select>
+
+    <select id="butlerRanking" resultType="com.qykj.finmaster.analytics.cs.dto.CsAnalyticsResp$ButlerRankItem">
+        SELECT
+            t.butler_owner_user AS butlerUser,
+            COALESCE(MAX(t.butler_owner_user_name), t.butler_owner_user) AS butlerUserName,
+            COUNT(DISTINCT t.id) AS expiringCount,
+            COUNT(DISTINCT CASE WHEN csr.renew_type IN (0,1,2) THEN t.id END) AS renewedCount,
+            CASE WHEN COUNT(DISTINCT t.id) = 0 THEN 0
+                 ELSE ROUND(COUNT(DISTINCT CASE WHEN csr.renew_type IN (0,1,2) THEN t.id END) * 100.0
+                           / COUNT(DISTINCT t.id), 2)
+            END AS renewalRate,
+            COALESCE(SUM(CASE WHEN csr.renew_type IN (0,1,2) THEN csr.renew_amount ELSE 0 END), 0) AS renewAmount
+        FROM company_service t
+        LEFT JOIN company_service_renew csr ON csr.company_service_id = t.id AND csr.deleted = 0
+        WHERE t.deleted = 0
+          AND t.end_date IS NOT NULL
+          AND t.end_date &gt;= #{start}
+          AND t.end_date &lt;= #{end}
+          AND t.butler_owner_user IS NOT NULL
+        <include refid="csScopeFilter"/>
+        GROUP BY t.butler_owner_user
+        ORDER BY expiringCount DESC
+        LIMIT 30
+    </select>
+
+    <select id="renewTrendByMonth" resultType="java.util.Map">
+        SELECT DATE_FORMAT(csr.create_time, '%Y-%m') AS label,
+               COALESCE(SUM(csr.renew_amount), 0) AS value,
+               COUNT(*) AS count
+        FROM company_service t
+        INNER JOIN company_service_renew csr ON csr.company_service_id = t.id AND csr.deleted = 0
+            AND csr.renew_type IN (0, 1, 2)
+        WHERE t.deleted = 0
+          AND csr.create_time &gt;= #{start}
+          AND csr.create_time &lt;= #{end}
+        <include refid="csScopeFilter"/>
+        GROUP BY DATE_FORMAT(csr.create_time, '%Y-%m')
+        ORDER BY label
+    </select>
+
+    <select id="renewTrendByDay" resultType="java.util.Map">
+        SELECT DATE_FORMAT(csr.create_time, '%m-%d') AS label,
+               COALESCE(SUM(csr.renew_amount), 0) AS value,
+               COUNT(*) AS count
+        FROM company_service t
+        INNER JOIN company_service_renew csr ON csr.company_service_id = t.id AND csr.deleted = 0
+            AND csr.renew_type IN (0, 1, 2)
+        WHERE t.deleted = 0
+          AND csr.create_time &gt;= #{start}
+          AND csr.create_time &lt;= #{end}
+        <include refid="csScopeFilter"/>
+        GROUP BY DATE_FORMAT(csr.create_time, '%m-%d'), DATE(csr.create_time)
+        ORDER BY DATE(csr.create_time)
+    </select>
+
+    <!-- ===== Task ===== -->
+
+    <select id="countTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM common_task t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+          <if test="status != null">
+              AND t.status = #{status}
+          </if>
+        <include refid="taskScopeFilter"/>
+    </select>
+
+    <select id="countTotalTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM common_task t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="taskScopeFilter"/>
+    </select>
+
+    <select id="countOverdueTasks" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM common_task t
+        WHERE t.deleted = 0
+          AND t.wish_finish_time IS NOT NULL
+          AND t.wish_finish_time &lt; CURDATE()
+          AND (t.real_finish_time IS NULL OR t.real_finish_time &gt; t.wish_finish_time)
+          AND (t.status IS NULL OR t.status NOT IN ('COMPLETED', 'CANCELLED', 'FINISHED'))
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="taskScopeFilter"/>
+    </select>
+
+    <select id="avgProcessingDays" resultType="java.math.BigDecimal">
+        SELECT COALESCE(ROUND(AVG(DATEDIFF(t.real_finish_time, DATE(t.create_time))), 2), 0)
+        FROM common_task t
+        WHERE t.deleted = 0
+          AND t.real_finish_time IS NOT NULL
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="taskScopeFilter"/>
+    </select>
+
+    <select id="taskStatusDist" resultType="java.util.Map">
+        SELECT COALESCE(t.status, 'UNKNOWN') AS status, COUNT(*) AS count
+        FROM common_task t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="taskScopeFilter"/>
+        GROUP BY t.status
+    </select>
+
+    <select id="taskOwnerRanking" resultType="com.qykj.finmaster.analytics.cs.dto.CsAnalyticsResp$TaskOwnerRank">
+        SELECT
+            COALESCE(t.current_owner_user, t.owner_user) AS ownerUser,
+            COALESCE(MAX(t.current_owner_user_name), MAX(t.owner_user_name),
+                     MAX(COALESCE(t.current_owner_user, t.owner_user))) AS ownerUserName,
+            COUNT(*) AS totalTasks,
+            SUM(CASE WHEN t.status IN ('COMPLETED', 'FINISHED') THEN 1 ELSE 0 END) AS completedTasks,
+            SUM(CASE WHEN t.wish_finish_time IS NOT NULL
+                        AND t.wish_finish_time &lt; CURDATE()
+                        AND (t.real_finish_time IS NULL OR t.real_finish_time &gt; t.wish_finish_time)
+                        AND (t.status IS NULL OR t.status NOT IN ('COMPLETED', 'CANCELLED', 'FINISHED'))
+                     THEN 1 ELSE 0 END) AS overdueTasks,
+            CASE WHEN COUNT(*) = 0 THEN 0
+                 ELSE ROUND(SUM(CASE WHEN t.status IN ('COMPLETED', 'FINISHED') THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2)
+            END AS completionRate
+        FROM common_task t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+          AND COALESCE(t.current_owner_user, t.owner_user) IS NOT NULL
+        <include refid="taskOwnerScopeFilter"/>
+        GROUP BY COALESCE(t.current_owner_user, t.owner_user)
+        ORDER BY totalTasks DESC
+        LIMIT 30
+    </select>
+
+    <!-- ===== Customer Profile ===== -->
+
+    <select id="starLevelDist" resultType="com.qykj.finmaster.analytics.cs.dto.CsAnalyticsResp$StarLevelItem">
+        SELECT
+            COALESCE(t.star_level, 0) AS starLevel,
+            COUNT(*) AS count
+        FROM cs_customer_profile t
+        WHERE t.deleted = 0
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        GROUP BY t.star_level
+        ORDER BY starLevel
+    </select>
+
+    <select id="bookkeepingDist" resultType="com.qykj.finmaster.analytics.cs.dto.CsAnalyticsResp$StringKeyCount">
+        SELECT
+            COALESCE(t.bookkeeping_status, '未设置') AS name,
+            COUNT(*) AS count
+        FROM cs_customer_profile t
+        WHERE t.deleted = 0
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        GROUP BY t.bookkeeping_status
+        ORDER BY count DESC
+        LIMIT 15
+    </select>
+
+    <select id="filingDist" resultType="com.qykj.finmaster.analytics.cs.dto.CsAnalyticsResp$StringKeyCount">
+        SELECT
+            COALESCE(t.filing_status, '未设置') AS name,
+            COUNT(*) AS count
+        FROM cs_customer_profile t
+        WHERE t.deleted = 0
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        GROUP BY t.filing_status
+        ORDER BY count DESC
+        LIMIT 15
+    </select>
+
+    <!-- 未续费原因聚合 -->
+    <select id="notRenewReasons" resultType="com.qykj.finmaster.analytics.cs.dto.CsAnalyticsResp$StringKeyCount">
+        SELECT
+            TRIM(csr.renew_reason) AS name,
+            COUNT(*) AS count
+        FROM company_service t
+        INNER JOIN company_service_renew csr
+            ON csr.company_service_id = t.id
+            AND csr.deleted = 0
+            AND csr.renew_type = 3
+            AND csr.renew_reason IS NOT NULL
+            AND TRIM(csr.renew_reason) != ''
+        WHERE t.deleted = 0
+          AND t.end_date IS NOT NULL
+          AND t.end_date &gt;= #{start}
+          AND t.end_date &lt;= #{end}
+        <include refid="csScopeFilter"/>
+        GROUP BY TRIM(csr.renew_reason)
+        ORDER BY count DESC
+        LIMIT 20
+    </select>
+
+    <select id="countNotRenewedWithoutReason" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT t.id)
+        FROM company_service t
+        INNER JOIN company_service_renew csr
+            ON csr.company_service_id = t.id
+            AND csr.deleted = 0
+            AND csr.renew_type = 3
+            AND (csr.renew_reason IS NULL OR TRIM(csr.renew_reason) = '')
+        WHERE t.deleted = 0
+          AND t.end_date IS NOT NULL
+          AND t.end_date &gt;= #{start}
+          AND t.end_date &lt;= #{end}
+        <include refid="csScopeFilter"/>
+    </select>
+
+</mapper>

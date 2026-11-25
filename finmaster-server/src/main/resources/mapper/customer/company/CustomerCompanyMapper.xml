@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.customer.company.mapper.CustomerCompanyMapper">
+
+    <resultMap type="com.qykj.finmaster.customer.company.domain.CustomerCompany" id="CustomerCompanyResult">
+        <id     property="id"           column="id"            />
+        <result property="customerId"   column="customer_id"   />
+        <result property="openid"       column="open_id"        />
+        <result property="companyName"  column="company_name"  />
+        <result property="taxNumber"    column="tax_number"    />
+        <result property="createBy"     column="create_by"     />
+        <result property="createTime"   column="create_time"   />
+        <result property="updateBy"     column="update_by"     />
+        <result property="updateTime"   column="update_time"   />
+        <result property="remark"       column="remark"        />
+        <result property="tenantId"     column="tenant_id"     />
+        <result property="legalName"    column="legal_name"     />
+        <result property="enabled"      column="enabled"       />
+        <result property="isVerifyTax"      column="is_verify_tax"       />
+        <result property="companyType"      column="company_type"       />
+        <result property="experienceAccountSetId" column="experience_account_set_id" />
+        <result property="isInvoicing"      column="is_invoicing"       />
+    </resultMap>
+
+    <sql id="selectCustomerCompanyVo">
+        select id, customer_id, open_id, company_name, tax_number, create_by, create_time, update_by, update_time, remark, tenant_id, legal_name, enabled, is_verify_tax, company_type, experience_account_set_id, is_invoicing
+        from customer_company
+    </sql>
+
+    <select id="selectCustomerCompanyById" parameterType="Long" resultMap="CustomerCompanyResult">
+        <include refid="selectCustomerCompanyVo"/>
+        where deleted = 0 and id = #{id}
+        <if test="tenantId != null"> and tenant_id = #{tenantId}</if>
+    </select>
+    <select id="getCustomerCompanyList" resultType="com.qykj.finmaster.customer.company.domain.resp.GetCustomerCompanyPageResp">
+        <!-- 已优化：删掉 LEFT JOIN sys_dict_data，company_type → 名称改由 Service 层批量查字典再回填，
+             避免每行一次 sys_dict_data 全扫（值字段无索引、无 dict_code 限定）。
+             注：业务要求查询全部租户的数据，所以不在 JOIN/WHERE 上强制 tenant_id（保留 <if> 兜底）。 -->
+        SELECT
+            cc.id,
+            cc.open_id AS openid,
+            cc.company_name AS companyName,
+            cc.tax_number AS taxNumber,
+            cc.create_time AS createTime,
+            cc.is_invoicing,
+            cc.is_verify_tax,
+            cc.enabled,
+            ci.customer_name AS customerName,
+            ci.phone AS phone,
+            ci.create_by AS createBy,
+            ci.owner_user AS ownerUser,
+            cc.legal_name AS legalName,
+            cc.legal_id_card AS legalIdCard,
+            cc.registered_address AS registeredAddress,
+            cc.tax_district AS taxDistrict,
+            cc.company_type AS companyType,
+            cc.company_status AS companyStatus,
+            cc.reg_status AS regStatus
+        FROM customer_company cc
+        LEFT JOIN customer_info ci ON cc.open_id = ci.open_id
+        WHERE cc.deleted = 0
+        <if test="params.tenantId != null">
+            AND cc.tenant_id = #{params.tenantId}
+        </if>
+        <if test="params.customerId != null ">
+            AND cc.customer_id = #{params.customerId}
+        </if>
+        <if test="params.companyName != null and params.companyName != ''">
+            AND cc.company_name like concat('%', #{params.companyName}, '%')
+        </if>
+        <if test="params.taxNumber != null and params.taxNumber != ''">
+            AND cc.tax_number like concat('%', #{params.taxNumber}, '%')
+        </if>
+        <if test="params.customerName != null and params.customerName != ''">
+            AND ci.customer_name like concat('%', #{params.customerName}, '%')
+        </if>
+        <if test="params.phone != null and params.phone != ''">
+            AND ci.phone = #{params.phone}
+        </if>
+        <if test="params.isVerifyTax != null">
+            AND cc.is_verify_tax = #{params.isVerifyTax}
+        </if>
+        <if test="params.isInvoicing != null">
+            AND cc.is_invoicing = #{params.isInvoicing}
+        </if>
+        <if test="params.companyStatus != null and params.companyStatus != ''">
+            AND cc.company_status = #{params.companyStatus}
+        </if>
+        <if test="params.regStatus != null and params.regStatus != ''">
+            AND cc.reg_status = #{params.regStatus}
+        </if>
+    </select>
+
+    <insert id="insertCustomerCompany" parameterType="com.qykj.finmaster.customer.company.domain.CustomerCompany" useGeneratedKeys="true" keyProperty="id">
+        insert into customer_company
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="tenantId != null">tenant_id,</if>
+            <if test="customerId != null">customer_id,</if>
+            <if test="openid != null">open_id,</if>
+            <if test="companyName != null">company_name,</if>
+            <if test="taxNumber != null">tax_number,</if>
+            <if test="createBy != null">create_by,</if>
+            <if test="createTime != null">create_time,</if>
+            <if test="updateBy != null">update_by,</if>
+            <if test="updateTime != null">update_time,</if>
+            <if test="remark != null">remark,</if>
+            <if test="companyType !=null">company_type</if>
+         </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="tenantId != null">#{tenantId},</if>
+            <if test="customerId != null">#{customerId},</if>
+            <if test="openid != null">#{openid},</if>
+            <if test="companyName != null">#{companyName},</if>
+            <if test="taxNumber != null">#{taxNumber},</if>
+            <if test="createBy != null">#{createBy},</if>
+            <if test="createTime != null">#{createTime},</if>
+            <if test="updateBy != null">#{updateBy},</if>
+            <if test="updateTime != null">#{updateTime},</if>
+            <if test="remark != null">#{remark},</if>
+            <if test="companyType !=null">#{companyType}</if>
+         </trim>
+    </insert>
+
+    <update id="updateCustomerCompany" parameterType="com.qykj.finmaster.customer.company.domain.CustomerCompany">
+        update customer_company
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="customerId != null">customer_id = #{customerId},</if>
+            <if test="openid != null">open_id = #{openid},</if>
+            <if test="companyName != null">company_name = #{companyName},</if>
+            <if test="taxNumber != null">tax_number = #{taxNumber},</if>
+            <if test="createBy != null">create_by = #{createBy},</if>
+            <if test="createTime != null">create_time = #{createTime},</if>
+            <if test="updateBy != null">update_by = #{updateBy},</if>
+            <if test="updateTime != null">update_time = #{updateTime},</if>
+            <if test="remark != null">remark = #{remark},</if>
+            <if test="companyType != null">company_type = #{companyType}</if>
+        </trim>
+        where id = #{id}
+    </update>
+
+    <delete id="deleteCustomerCompanyById" parameterType="Long">
+        delete from customer_company where id = #{id}
+    </delete>
+
+    <delete id="deleteCustomerCompanyByIds" parameterType="String">
+        delete from customer_company where id in
+        <foreach item="id" collection="array" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+    <!-- 大屏：合作中公司总数（DISTINCT tax_number）。
+         严格口径（对齐用户权威 SQL）：company_status='COOPERATING' 且 存在 company_service(service_id=1) 记账服务；
+         不分省、不加 deleted、不加 tenant＝全量跨租户。 -->
+    <select id="coopCompanyTotal" resultType="long">
+        SELECT COUNT(DISTINCT cc.tax_number)
+        FROM customer_company cc
+        WHERE cc.company_status = 'COOPERATING'
+          AND EXISTS (SELECT 1 FROM company_service cs
+                      WHERE cs.company_id = cc.id AND cs.service_id = 1)
+    </select>
+
+    <!-- 大屏：合作中公司按【办税地 tax_district】去重税号计数（同口径 + 非空 + 倒序），供地图/榜单。
+         tax_district = 省份 ∪ 5 计划单列市（青岛/深圳/大连/厦门/宁波），与 province 分组互斥无双计；
+         SELECT 别名仍叫 province 以兼容前端契约（值现含市名）。total 不受影响（不分组）。 -->
+    <select id="coopCompanyByProvince" resultType="com.qykj.finmaster.customer.company.domain.resp.ProvinceCountVo">
+        SELECT cc.tax_district AS province, COUNT(DISTINCT cc.tax_number) AS count
+        FROM customer_company cc
+        WHERE cc.company_status = 'COOPERATING'
+          AND cc.tax_district IS NOT NULL AND cc.tax_district &lt;&gt; ''
+          AND EXISTS (SELECT 1 FROM company_service cs
+                      WHERE cs.company_id = cc.id AND cs.service_id = 1)
+        GROUP BY cc.tax_district
+        ORDER BY count DESC
+    </select>
+</mapper>

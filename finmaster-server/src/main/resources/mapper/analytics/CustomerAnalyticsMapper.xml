@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.analytics.customer.mapper.CustomerAnalyticsMapper">
+
+    <!--
+        customer_info scope 过滤：
+          PERSONAL — owner_user = 我，或 owner_user IS NULL 且 create_by = 我
+          TEAM    — owner_user IN 团队 或 create_by IN 团队
+          COMPANY — 仅租户
+    -->
+    <sql id="scopeFilter">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() == "PERSONAL" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND (
+                t.owner_user IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                OR (t.owner_user IS NULL AND t.create_by IN
+                    <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                )
+            )
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() == "TEAM" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND (
+                t.owner_user IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                OR t.create_by IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+            )
+        </if>
+    </sql>
+
+    <select id="countPrivateSea" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM customer_info t
+        WHERE t.customer_type = 1
+        <include refid="scopeFilter"/>
+    </select>
+
+    <!--
+        沉睡客户：customer_type = 2（躺在公海里的客户，已被释放或从未被认领）。
+        这是系统级指标，不与某个负责人绑定（转入公海时 owner_user 已清空）。
+    -->
+    <select id="countDormant" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM customer_info t
+        WHERE t.customer_type = 2
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+    </select>
+
+    <!-- 从未跟进：私海里 last_follow_time 为空的客户（反映分配后未触达的质量问题） -->
+    <select id="countNeverFollowed" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM customer_info t
+        WHERE t.customer_type = 1
+          AND t.last_follow_time IS NULL
+        <include refid="scopeFilter"/>
+    </select>
+
+    <!-- 状态分布：NULL 归为 0（"未设置"），由 Service 层映射显示文案 -->
+    <select id="statusDistribution" resultType="java.util.Map">
+        SELECT COALESCE(t.status, 0) AS status, COUNT(*) AS count
+        FROM customer_info t
+        WHERE t.customer_type = 1
+        <include refid="scopeFilter"/>
+        GROUP BY COALESCE(t.status, 0)
+    </select>
+
+    <!--
+        负责人私海负载：公海客户没有 owner_user，不纳入。
+        "从未跟进占比"作为私海质量的核心列。
+    -->
+    <select id="ownerLoad" resultType="com.qykj.finmaster.analytics.customer.dto.CustomerAnalyticsResp$OwnerLoad">
+        SELECT
+            COALESCE(t.owner_user, t.create_by) AS ownerUser,
+            COALESCE(t.owner_user_name, t.create_by_name, COALESCE(t.owner_user, t.create_by)) AS ownerUserName,
+            COUNT(*) AS customerCount,
+            SUM(CASE WHEN t.last_follow_time IS NULL THEN 1 ELSE 0 END) AS neverFollowedCount,
+            CASE WHEN COUNT(*) = 0 THEN 0
+                 ELSE ROUND(SUM(CASE WHEN t.last_follow_time IS NULL THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2)
+            END AS neverFollowedRate
+        FROM customer_info t
+        WHERE t.customer_type = 1
+          AND COALESCE(t.owner_user, t.create_by) IS NOT NULL
+        <include refid="scopeFilter"/>
+        GROUP BY ownerUser, ownerUserName
+        ORDER BY customerCount DESC
+        LIMIT 20
+    </select>
+
+    <select id="countDealCustomers" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT t.id)
+        FROM customer_info t
+        INNER JOIN orders o ON o.customer_id = t.id AND o.status = 'PAID'
+        WHERE t.customer_type = 1
+        <include refid="scopeFilter"/>
+    </select>
+
+    <!--
+        线索→首单周期：从 sale_lead.create_time 到 MIN(pay_time)。
+        只统计曾在私海的客户（当前 customer_type=1）。
+    -->
+    <select id="leadToOrderDays" resultType="java.math.BigDecimal">
+        SELECT TIMESTAMPDIFF(HOUR, sl.create_time, MIN(o.pay_time)) / 24.0 AS days
+        FROM customer_info t
+        INNER JOIN orders o
+            ON o.customer_id = t.id
+            AND o.status = 'PAID'
+            AND (o.order_type IS NULL OR o.order_type = 'NORMAL')
+            AND o.pay_time IS NOT NULL
+        INNER JOIN sale_lead sl ON sl.id = t.lead_id AND sl.deleted = 0
+        WHERE t.customer_type = 1
+        <include refid="scopeFilter"/>
+        GROUP BY t.id, sl.create_time
+        HAVING days IS NOT NULL
+    </select>
+
+    <!--
+        首单→续费周期：从 MIN(pay_time) 到首个 renew 记录的 create_time。
+    -->
+    <select id="orderToRenewDays" resultType="java.math.BigDecimal">
+        SELECT TIMESTAMPDIFF(HOUR, first_order.ot, csr.create_time) / 24.0 AS days
+        FROM customer_info t
+        INNER JOIN (
+            SELECT o.customer_id, MIN(o.pay_time) AS ot
+            FROM orders o
+            WHERE o.status = 'PAID'
+              AND (o.order_type IS NULL OR o.order_type = 'NORMAL')
+              AND o.pay_time IS NOT NULL
+            GROUP BY o.customer_id
+        ) first_order ON first_order.customer_id = t.id
+        INNER JOIN company_service cs ON cs.customer_id = t.id AND cs.deleted = 0
+        INNER JOIN company_service_renew csr ON csr.company_service_id = cs.id AND csr.deleted = 0
+        WHERE t.customer_type = 1
+        <include refid="scopeFilter"/>
+        HAVING days IS NOT NULL AND days &gt;= 0
+    </select>
+
+    <select id="countTotalLeads" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM sale_lead t
+        WHERE t.deleted = 0
+        <include refid="scopeFilter"/>
+    </select>
+
+    <select id="countConvertedCustomers" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM customer_info t
+        WHERE t.customer_type = 1
+        <include refid="scopeFilter"/>
+    </select>
+
+    <select id="countFirstOrderCustomers" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT t.id)
+        FROM customer_info t
+        INNER JOIN orders o ON o.customer_id = t.id AND o.status = 'PAID'
+        WHERE t.customer_type = 1
+        <include refid="scopeFilter"/>
+    </select>
+
+    <select id="countRenewedCustomers" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT t.id)
+        FROM customer_info t
+        INNER JOIN company_service cs ON cs.customer_id = t.id AND cs.deleted = 0
+        INNER JOIN company_service_renew csr ON csr.company_service_id = cs.id AND csr.deleted = 0
+        WHERE t.customer_type = 1
+        <include refid="scopeFilter"/>
+    </select>
+
+    <!-- ===== 公海回收 ===== -->
+    <!-- customer_log 过滤：按 create_by（操作执行人）用户名 -->
+    <sql id="logScopeFilter">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND t.create_by IN
+            <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <select id="countTransferIn" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM customer_log t
+        WHERE t.log_type = 5
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="logScopeFilter"/>
+    </select>
+
+    <select id="countClaim" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM customer_log t
+        WHERE t.log_type = 6
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="logScopeFilter"/>
+    </select>
+
+    <select id="countAssign" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM customer_log t
+        WHERE t.log_type = 7
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="logScopeFilter"/>
+    </select>
+
+    <select id="countCurrentPublicSea" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM customer_info t
+        WHERE t.customer_type = 2
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+    </select>
+
+    <!--
+        平均停留天数：
+        对每一次转入公海（log_type=5）事件，找到其后最近一次回收（log_type IN(6,7)）的时间，
+        计算两者差值后取均值。
+        相比 MAX+MAX 方式，此方法在客户被多次转入/回收时能正确逐对配对，避免错位。
+    -->
+    <select id="avgStayDays" resultType="java.math.BigDecimal">
+        SELECT COALESCE(ROUND(AVG(TIMESTAMPDIFF(HOUR, cl_in.create_time, cl_in.next_reclaim) / 24.0), 2), 0)
+        FROM (
+            SELECT
+                cl_in.customer_id,
+                cl_in.create_time,
+                (SELECT MIN(cl_out.create_time)
+                 FROM customer_log cl_out
+                 WHERE cl_out.customer_id = cl_in.customer_id
+                   AND cl_out.log_type IN (6, 7)
+                   AND cl_out.create_time &gt; cl_in.create_time
+                ) AS next_reclaim
+            FROM customer_log cl_in
+            WHERE cl_in.log_type = 5
+              AND cl_in.create_time &gt;= #{start}
+              AND cl_in.create_time &lt;= #{end}
+            <if test="ctx.tenantId != null">
+              AND cl_in.tenant_id = #{ctx.tenantId}
+            </if>
+            <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+              AND cl_in.create_by IN
+              <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+            </if>
+        ) AS cl_in
+        WHERE cl_in.next_reclaim IS NOT NULL
+    </select>
+
+    <select id="transferTrendByDay" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.create_time, '%m-%d') AS label, COUNT(*) AS count
+        FROM customer_log t
+        WHERE t.log_type = 5
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="logScopeFilter"/>
+        GROUP BY DATE_FORMAT(t.create_time, '%m-%d'), DATE(t.create_time)
+        ORDER BY DATE(t.create_time)
+    </select>
+
+    <select id="transferTrendByMonth" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.create_time, '%Y-%m') AS label, COUNT(*) AS count
+        FROM customer_log t
+        WHERE t.log_type = 5
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="logScopeFilter"/>
+        GROUP BY DATE_FORMAT(t.create_time, '%Y-%m')
+        ORDER BY label
+    </select>
+
+    <select id="recycleTrendByDay" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.create_time, '%m-%d') AS label, COUNT(*) AS count
+        FROM customer_log t
+        WHERE t.log_type IN (6, 7)
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="logScopeFilter"/>
+        GROUP BY DATE_FORMAT(t.create_time, '%m-%d'), DATE(t.create_time)
+        ORDER BY DATE(t.create_time)
+    </select>
+
+    <select id="recycleTrendByMonth" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.create_time, '%Y-%m') AS label, COUNT(*) AS count
+        FROM customer_log t
+        WHERE t.log_type IN (6, 7)
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="logScopeFilter"/>
+        GROUP BY DATE_FORMAT(t.create_time, '%Y-%m')
+        ORDER BY label
+    </select>
+
+    <!-- 释放人 TOP 10：按 log_type=5 的 create_by 聚合 -->
+    <select id="topReleasers" resultType="com.qykj.finmaster.analytics.customer.dto.CustomerAnalyticsResp$ReleaseItem">
+        SELECT
+            t.create_by AS username,
+            COALESCE(MAX(su.real_name), MAX(t.create_by_name), t.create_by) AS realName,
+            COUNT(*) AS releaseCount
+        FROM customer_log t
+        LEFT JOIN sys_user su ON su.username = t.create_by AND su.deleted = 0
+        WHERE t.log_type = 5
+          AND t.create_by IS NOT NULL
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="logScopeFilter"/>
+        GROUP BY t.create_by
+        ORDER BY releaseCount DESC
+        LIMIT 10
+    </select>
+
+</mapper>

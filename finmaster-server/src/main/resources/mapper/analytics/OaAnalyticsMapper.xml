@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.analytics.oa.mapper.OaAnalyticsMapper">
+
+    <!-- OA 按 user_id 或 username 过滤；此处用 user_id 更准 -->
+    <sql id="oaScopeFilter">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userIdList != null and ctx.userIdList.size() > 0'>
+            AND t.user_id IN
+            <foreach item="u" collection="ctx.userIdList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <select id="statusDistribution" resultType="java.util.Map">
+        SELECT COALESCE(t.status, 'UNKNOWN') AS status, COUNT(*) AS count
+        FROM oa_attendance t
+        WHERE t.deleted = 0
+          AND t.attendance_date &gt;= #{start}
+          AND t.attendance_date &lt;= #{end}
+        <include refid="oaScopeFilter"/>
+        GROUP BY t.status
+    </select>
+
+    <select id="worstComplianceUsers" resultType="com.qykj.finmaster.analytics.oa.dto.OaAnalyticsResp$UserCompliance">
+        SELECT
+            t.user_id AS userId,
+            t.username AS username,
+            COALESCE(MAX(su.real_name), MAX(t.real_name)) AS realName,
+            COUNT(*) AS totalDays,
+            SUM(CASE WHEN t.status = 'LATE' THEN 1 ELSE 0 END) AS lateCount,
+            SUM(CASE WHEN t.status = 'ABSENT' THEN 1 ELSE 0 END) AS absentCount,
+            CASE WHEN COUNT(*) = 0 THEN 0
+                 ELSE ROUND(SUM(CASE WHEN t.status = 'NORMAL' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2)
+            END AS complianceRate
+        FROM oa_attendance t
+        LEFT JOIN sys_user su ON su.id = t.user_id AND su.deleted = 0
+        WHERE t.deleted = 0
+          AND t.user_id IS NOT NULL
+          AND t.attendance_date &gt;= #{start}
+          AND t.attendance_date &lt;= #{end}
+        <include refid="oaScopeFilter"/>
+        GROUP BY t.user_id, t.username
+        HAVING totalDays &gt;= 5
+        ORDER BY complianceRate ASC, lateCount DESC
+        LIMIT 20
+    </select>
+
+    <!-- OA 请假/加班过滤（oa_leave 按 applicant 用户名过滤；oa_overtime_record 按 user_id 过滤） -->
+    <sql id="oaLeaveScopeFilter">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND t.applicant IN
+            <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <sql id="oaOvertimeScopeFilter">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userIdList != null and ctx.userIdList.size() > 0'>
+            AND t.user_id IN
+            <foreach item="u" collection="ctx.userIdList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <select id="sumLeaveDays" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(t.duration), 0) FROM oa_leave t
+        WHERE t.deleted = 0
+          AND t.status = 'APPROVED'
+          AND t.start_time &gt;= #{start}
+          AND t.start_time &lt;= #{end}
+        <include refid="oaLeaveScopeFilter"/>
+    </select>
+
+    <select id="countApprovedLeaves" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM oa_leave t
+        WHERE t.deleted = 0
+          AND t.status = 'APPROVED'
+          AND t.start_time &gt;= #{start}
+          AND t.start_time &lt;= #{end}
+        <include refid="oaLeaveScopeFilter"/>
+    </select>
+
+    <select id="leaveTypeDist" resultType="com.qykj.finmaster.analytics.oa.dto.OaAnalyticsResp$LeaveTypeItem">
+        SELECT
+            COALESCE(t.leave_type, 'OTHER') AS leaveType,
+            COUNT(*) AS count,
+            COALESCE(SUM(t.duration), 0) AS totalDays
+        FROM oa_leave t
+        WHERE t.deleted = 0
+          AND t.status = 'APPROVED'
+          AND t.start_time &gt;= #{start}
+          AND t.start_time &lt;= #{end}
+        <include refid="oaLeaveScopeFilter"/>
+        GROUP BY t.leave_type
+        ORDER BY count DESC
+    </select>
+
+    <select id="sumOvertimeHours" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(t.overtime_hours), 0) FROM oa_overtime_record t
+        WHERE t.deleted = 0
+          AND t.overtime_date &gt;= DATE(#{start})
+          AND t.overtime_date &lt;= DATE(#{end})
+        <include refid="oaOvertimeScopeFilter"/>
+    </select>
+
+    <select id="countOvertime" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM oa_overtime_record t
+        WHERE t.deleted = 0
+          AND t.overtime_date &gt;= DATE(#{start})
+          AND t.overtime_date &lt;= DATE(#{end})
+        <include refid="oaOvertimeScopeFilter"/>
+    </select>
+
+    <select id="topLeaveUsers" resultType="com.qykj.finmaster.analytics.oa.dto.OaAnalyticsResp$UserLeaveItem">
+        SELECT
+            t.applicant AS applicant,
+            COALESCE(MAX(su.real_name), MAX(t.applicant_name)) AS applicantName,
+            COUNT(*) AS leaveCount,
+            COALESCE(SUM(t.duration), 0) AS totalDays
+        FROM oa_leave t
+        LEFT JOIN sys_user su ON su.username = t.applicant AND su.deleted = 0
+        WHERE t.deleted = 0
+          AND t.status = 'APPROVED'
+          AND t.applicant IS NOT NULL
+          AND t.start_time &gt;= #{start}
+          AND t.start_time &lt;= #{end}
+        <include refid="oaLeaveScopeFilter"/>
+        GROUP BY t.applicant
+        ORDER BY totalDays DESC
+        LIMIT 10
+    </select>
+
+</mapper>

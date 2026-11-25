@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.customer.lead.mapper.LeadPhoneMapper">
+
+    <!--
+        按 phone / openId / wechat 查询命中的 leadId 列表（主表 ∪ 子表，OR 关系，去重）。
+        每个非空条件独立产生一个 SELECT 块，块之间用 UNION 拼接；用 <trim prefixOverrides> 去除前导 UNION，
+        保证只填写任一字段也能拼出合法 SQL。
+        三个字段全为空时，落到兜底 SELECT 让结果为空集，避免空派生表语法错误。
+    -->
+    <select id="selectLeadIdsByContact" resultType="java.lang.Long">
+        SELECT DISTINCT lead_id FROM (
+            <trim prefixOverrides="UNION">
+                <if test="phone != null and phone != ''">
+                    SELECT id AS lead_id FROM sale_lead
+                     WHERE deleted = 0 AND phone = #{phone}
+                     <if test="tenantId != null"> AND tenant_id = #{tenantId}</if>
+                    UNION
+                    SELECT lead_id FROM lead_phone
+                     WHERE deleted = 0 AND phone = #{phone}
+                     <if test="tenantId != null"> AND tenant_id = #{tenantId}</if>
+                </if>
+                <if test="openId != null and openId != ''">
+                    UNION
+                    SELECT id AS lead_id FROM sale_lead
+                     WHERE deleted = 0 AND open_id = #{openId}
+                     <if test="tenantId != null"> AND tenant_id = #{tenantId}</if>
+                    UNION
+                    SELECT lead_id FROM lead_phone
+                     WHERE deleted = 0 AND open_id = #{openId}
+                     <if test="tenantId != null"> AND tenant_id = #{tenantId}</if>
+                </if>
+                <if test="wechat != null and wechat != ''">
+                    UNION
+                    SELECT id AS lead_id FROM sale_lead
+                     WHERE deleted = 0 AND wechat = #{wechat}
+                     <if test="tenantId != null"> AND tenant_id = #{tenantId}</if>
+                    UNION
+                    SELECT lead_id FROM lead_phone
+                     WHERE deleted = 0 AND wechat = #{wechat}
+                     <if test="tenantId != null"> AND tenant_id = #{tenantId}</if>
+                </if>
+                <if test="(phone == null or phone == '') and (openId == null or openId == '') and (wechat == null or wechat == '')">
+                    SELECT NULL AS lead_id FROM DUAL WHERE 1=0
+                </if>
+            </trim>
+        ) t
+    </select>
+
+    <!--
+        仅查 lead_phone 子表的 leadId 列表（用于 uaAddCustomerCompany 反查家族客户）。
+        条件之间用 OR，用 <trim prefixOverrides="OR"> 去除前导 OR。
+        三个字段都为空时，兜底返回空集。
+    -->
+    <select id="selectLeadIdsByContactInPhoneTable" resultType="java.lang.Long">
+        SELECT DISTINCT lead_id FROM lead_phone
+         WHERE deleted = 0
+        <trim prefix="AND (" suffix=")" prefixOverrides="OR">
+            <if test="phone != null and phone != ''">
+                OR phone = #{phone}
+            </if>
+            <if test="openId != null and openId != ''">
+                OR open_id = #{openId}
+            </if>
+            <if test="wechat != null and wechat != ''">
+                OR wechat = #{wechat}
+            </if>
+            <if test="(phone == null or phone == '') and (openId == null or openId == '') and (wechat == null or wechat == '')">
+                1=0
+            </if>
+        </trim>
+    </select>
+
+</mapper>

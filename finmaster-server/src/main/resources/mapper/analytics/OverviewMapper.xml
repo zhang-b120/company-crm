@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.analytics.overview.mapper.OverviewMapper">
+
+    <!--
+        通用 scope 过滤（针对同时含 owner_user 与 create_by 的表：sale_lead / customer_info）
+        语义：
+          PERSONAL — owner_user = 我，或 owner_user IS NULL 且 create_by = 我（我创建但未分配给别人）
+          TEAM    — owner_user IN 团队 或 create_by IN 团队
+          COMPANY — 仅按 tenant 过滤
+    -->
+    <sql id="scopeFilterByUsername">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() == "PERSONAL" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND (
+                t.owner_user IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                OR (t.owner_user IS NULL AND t.create_by IN
+                    <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                )
+            )
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() == "TEAM" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND (
+                t.owner_user IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                OR t.create_by IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+            )
+        </if>
+    </sql>
+
+    <!-- 业绩订单过滤：已支付、正常订单（非退款）、按 pay_time 落在区间内 -->
+    <sql id="paidOrderFilter">
+        t.status = 'PAID'
+          AND (t.order_type IS NULL OR t.order_type = 'NORMAL')
+          AND t.pay_time IS NOT NULL
+          AND t.pay_time &gt;= #{start}
+          AND t.pay_time &lt;= #{end}
+    </sql>
+
+    <!-- 订单表只按 create_by 过滤（orders 无 owner_user） -->
+    <sql id="scopeFilterByCreateBy">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND t.create_by IN
+            <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <!-- 通话表按 caller_user_id 过滤 -->
+    <sql id="scopeFilterByCallerId">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userIdList != null and ctx.userIdList.size() > 0'>
+            AND t.caller_user_id IN
+            <foreach item="u" collection="ctx.userIdList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <select id="countNewLeads" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM sale_lead t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="scopeFilterByUsername"/>
+    </select>
+
+    <select id="countNewCustomers" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM customer_info t
+        WHERE t.customer_type = 1
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="scopeFilterByUsername"/>
+    </select>
+
+    <select id="sumOrderAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(t.total_amount), 0)
+        FROM orders t
+        WHERE <include refid="paidOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="countCalls" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM call_record t
+        WHERE t.deleted = 0
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+    </select>
+
+    <select id="leadFunnel" resultType="java.util.Map">
+        SELECT
+            t.status AS status,
+            COUNT(*) AS count
+        FROM sale_lead t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="scopeFilterByUsername"/>
+        GROUP BY t.status
+    </select>
+
+    <select id="orderTrendByDay" resultType="java.util.Map">
+        SELECT
+            DATE_FORMAT(t.pay_time, '%m-%d') AS label,
+            COALESCE(SUM(t.total_amount), 0) AS value,
+            COUNT(*) AS count
+        FROM orders t
+        WHERE <include refid="paidOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY DATE_FORMAT(t.pay_time, '%m-%d'), DATE(t.pay_time)
+        ORDER BY DATE(t.pay_time)
+    </select>
+
+    <select id="orderTrendByMonth" resultType="java.util.Map">
+        SELECT
+            DATE_FORMAT(t.pay_time, '%Y-%m') AS label,
+            COALESCE(SUM(t.total_amount), 0) AS value,
+            COUNT(*) AS count
+        FROM orders t
+        WHERE <include refid="paidOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY DATE_FORMAT(t.pay_time, '%Y-%m')
+        ORDER BY label
+    </select>
+
+    <select id="salesTopN" resultType="com.qykj.finmaster.analytics.overview.dto.OverviewResp$SalesTopItem">
+        SELECT
+            t.create_by AS username,
+            COALESCE(su.real_name, t.create_by_name, t.create_by) AS realName,
+            COALESCE(SUM(t.total_amount), 0) AS orderAmount,
+            COUNT(*) AS orderCount
+        FROM orders t
+        LEFT JOIN sys_user su ON su.username = t.create_by AND su.deleted = 0
+        WHERE <include refid="paidOrderFilter"/>
+          AND t.create_by IS NOT NULL
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY t.create_by, realName
+        ORDER BY orderAmount DESC
+        LIMIT #{topN}
+    </select>
+
+</mapper>

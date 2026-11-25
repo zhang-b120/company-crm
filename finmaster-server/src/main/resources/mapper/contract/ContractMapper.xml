@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.contract.mapper.ContractMapper">
+
+    <resultMap id="ContractListResult" type="com.qykj.finmaster.contract.domain.resp.GetContractListResp">
+        <id     property="id"                    column="id"/>
+        <result property="contractNo"            column="contract_no"/>
+        <result property="companyId"             column="company_id"/>
+        <result property="companyName"           column="company_name"/>
+        <result property="customerId"            column="customer_id"/>
+        <result property="customerName"          column="customer_name"/>
+        <result property="businessId"           column="business_id"/>
+        <result property="businessName"         column="business_name"/>
+        <result property="contractType"         column="contract_type"/>
+        <result property="contractStartTime"     column="contract_start_time"/>
+        <result property="contractEndTime"      column="contract_end_time"/>
+        <result property="contractPrice"        column="contract_price"/>
+        <result property="haveOrder"            column="have_order"/>
+        <result property="haveAddress"          column="have_address"/>
+        <result property="status"               column="status"/>
+        <result property="transferTask"         column="transfer_task"/>
+        <result property="remark"               column="remark"/>
+        <result property="createByName"         column="create_by_name"/>
+        <result property="createTime"           column="create_time"/>
+        <result property="workOrderId"          column="work_order_id"/>
+        <result property="workOrderNo"          column="work_order_no"/>
+        <result property="contractFileUrl"      column="contract_file_url"/>
+    </resultMap>
+
+    <sql id="selectContractVo">
+        SELECT
+            c.id,
+            c.contract_no,
+            c.company_id,
+            cc.company_name,
+            cc.customer_id,
+            ci.customer_name,
+            c.business_id,
+            sb.business_name,
+            c.contract_type,
+            c.contract_start_time,
+            c.contract_end_time,
+            c.contract_price,
+            c.have_order,
+            c.have_address,
+            c.status,
+            c.transfer_task,
+            c.remark,
+            c.create_by_name,
+            c.create_time,
+            c.tenant_id,
+            c.deleted,
+            c.contract_file_url,
+            wo.id   AS work_order_id,
+            wo.task_no AS work_order_no
+        FROM contract c
+        LEFT JOIN customer_company cc ON c.company_id = cc.id
+        LEFT JOIN customer_info ci ON cc.customer_id = ci.id
+        LEFT JOIN sys_business sb ON c.business_id = sb.id
+        LEFT JOIN work_order wo ON wo.contract_id = c.id
+            AND wo.deleted = 0
+            AND wo.parent_task_id IS NULL
+            AND wo.status &lt;&gt; 'CANCELED'
+            AND wo.id = (
+                SELECT MAX(wo2.id) FROM work_order wo2
+                WHERE wo2.contract_id = c.id AND wo2.deleted = 0 AND wo2.parent_task_id IS NULL
+                  AND wo2.status &lt;&gt; 'CANCELED'
+            )
+        WHERE c.deleted = 0
+    </sql>
+
+    <select id="getContractList" resultMap="ContractListResult">
+        <include refid="selectContractVo"/>
+        <if test="params.tenantId != null">
+            AND c.tenant_id = #{params.tenantId}
+        </if>
+        <if test="params.contractNo != null and params.contractNo != ''">
+            AND c.contract_no LIKE CONCAT('%', #{params.contractNo}, '%')
+        </if>
+        <if test="params.companyName != null and params.companyName != ''">
+            AND cc.company_name LIKE CONCAT('%', #{params.companyName}, '%')
+        </if>
+        <if test="params.companyId != null">
+            AND c.company_id = #{params.companyId}
+        </if>
+        <if test="params.businessId != null">
+            AND c.business_id = #{params.businessId}
+        </if>
+        <if test="params.contractType != null and params.contractType != ''">
+            AND c.contract_type = #{params.contractType}
+        </if>
+        <if test="params.status != null and params.status != ''">
+            AND c.status = #{params.status}
+        </if>
+        <if test="params.haveOrder != null">
+            AND c.have_order = #{params.haveOrder}
+        </if>
+        <if test="params.contractStartTimeBegin != null and params.contractStartTimeBegin != ''">
+            AND c.contract_start_time &gt;= #{params.contractStartTimeBegin}
+        </if>
+        <if test="params.contractStartTimeEnd != null and params.contractStartTimeEnd != ''">
+            AND c.contract_start_time &lt;= #{params.contractStartTimeEnd}
+        </if>
+        <if test="params.dataScopeUserIds != null">
+            and (ci.create_by in
+            <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            or ci.owner_user in
+            <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            or c.create_by in
+            <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            )
+        </if>
+        ORDER BY c.create_time DESC
+    </select>
+
+    <select id="getCompanyIdsByBusinessNames" resultType="java.lang.Long">
+        SELECT DISTINCT c.company_id
+        FROM contract c
+        INNER JOIN sys_business sb ON sb.id = c.business_id AND sb.deleted = 0
+        WHERE c.tenant_id = #{tenantId}
+          AND c.deleted = 0
+          AND sb.business_name IN
+          <foreach collection="businessNames" item="name" open="(" separator="," close=")">
+              #{name}
+          </foreach>
+    </select>
+
+</mapper>

@@ -1,0 +1,572 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.customer.lead.mapper.LeadMapper">
+
+    <resultMap type="com.qykj.finmaster.customer.lead.entity.Lead" id="LeadResult">
+        <id     property="id"           column="id"            />
+        <result property="tenantId"     column="tenant_id"     />
+        <result property="leadName"     column="lead_name"     />
+        <result property="contactName"  column="contact_name"  />
+        <result property="phone"        column="phone"         />
+        <result property="wechat"       column="wechat"        />
+        <result property="email"        column="email"         />
+        <result property="companyName"  column="company_name"  />
+        <result property="source"       column="source"        />
+        <result property="status"       column="status"        />
+        <result property="ownerUser"    column="owner_user"    />
+        <result property="ownerUserName" column="owner_user_name" />
+        <result property="nextFollowTime" column="next_follow_time"/>
+        <result property="lastFollowContent" column="last_follow_content"/>
+        <result property="lastFollowTime" column="last_follow_time"/>
+        <result property="customerType" column="customer_type" />
+        <result property="createBy"     column="create_by"     />
+        <result property="createByName" column="create_by_name" />
+        <result property="createTime"   column="create_time"   />
+        <result property="updateBy"     column="update_by"     />
+        <result property="updateByName" column="update_by_name" />
+        <result property="updateTime"   column="update_time"   />
+        <result property="remark"       column="remark"        />
+        <result property="deleted"      column="deleted"       />
+        <result property="isValid"      column="is_valid"      />
+        <result property="openId"       column="open_id"       />
+        <result property="type"         column="type"       />
+    </resultMap>
+
+    <!--
+        与 LeadAutoInvalidateTask.autoRecycle 对齐的"线索回收硬过滤"片段。
+        调用方需保证：sale_lead 别名为 l；params.salesDeptUsernames 提供销售部成员 username 列表（service 层注入）
+        覆盖 getOutLeadList SQL 的 ③④⑤⑥⑧⑨ 六项过滤（时间窗 ② 由调用方各自决定）
+    -->
+    <sql id="leadRecycleHardFilters">
+        <!-- ③ 排除：已转私海 -->
+        AND NOT EXISTS (
+            SELECT 1 FROM customer_info ci_r1
+            WHERE ci_r1.lead_id = l.id AND ci_r1.customer_type = 1
+        )
+        <!-- ④ 排除：客户名下公司已"税号验证"或"开过票" -->
+        AND NOT EXISTS (
+            SELECT 1 FROM customer_info ci_r2
+            INNER JOIN customer_company cc_r ON cc_r.customer_id = ci_r2.id
+            WHERE ci_r2.lead_id = l.id AND (cc_r.is_verify_tax = 1 OR cc_r.is_invoicing = 1)
+        )
+        <!-- ⑤ 排除：客户名下有 PAID + NORMAL 订单 -->
+        AND NOT EXISTS (
+            SELECT 1 FROM customer_info ci_r3
+            INNER JOIN orders o_r ON o_r.customer_id = ci_r3.id
+            WHERE ci_r3.lead_id = l.id AND o_r.status = 'PAID' AND o_r.order_type = 'NORMAL'
+        )
+        <!-- ⑥ 指定人员（销售部成员）：只校验 owner_user。
+             cron 中同时校验 create_by 是为了兼容脏数据，预览场景 ⑨ 已要求 owner_user 非空，
+             此处单 IN 可让索引选择更稳定、避免大列表的 OR-IN 让优化器走全表扫。 -->
+        <if test="params.salesDeptUsernames != null and params.salesDeptUsernames.size() > 0">
+            AND l.owner_user IN
+            <foreach item="x" collection="params.salesDeptUsernames" open="(" separator="," close=")">#{x}</foreach>
+        </if>
+        <!-- ⑧ 排除"数据导入"历史脏数据 -->
+        AND (l.remark != '数据导入' OR l.remark IS NULL)
+        <!-- ⑨ 必须有 ownerUser -->
+        AND l.owner_user IS NOT NULL
+        AND l.owner_user != ''
+    </sql>
+
+    <!--
+        与 leadRecycleHardFilters 等价的另一版：调用方 @Param 直传（非 params 包装）。
+        供 SalesLeaderMapper / SalesWorkbenchMapper 等 workbench 侧的"即将回收"查询跨 namespace 复用。
+    -->
+    <sql id="leadRecycleHardFiltersDirect">
+        AND NOT EXISTS (
+            SELECT 1 FROM customer_info ci_r1
+            WHERE ci_r1.lead_id = l.id AND ci_r1.customer_type = 1
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM customer_info ci_r2
+            INNER JOIN customer_company cc_r ON cc_r.customer_id = ci_r2.id
+            WHERE ci_r2.lead_id = l.id AND (cc_r.is_verify_tax = 1 OR cc_r.is_invoicing = 1)
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM customer_info ci_r3
+            INNER JOIN orders o_r ON o_r.customer_id = ci_r3.id
+            WHERE ci_r3.lead_id = l.id AND o_r.status = 'PAID' AND o_r.order_type = 'NORMAL'
+        )
+        <!-- ⑥ 仅校验 owner_user（见 leadRecycleHardFilters 注释） -->
+        <if test="salesDeptUsernames != null and salesDeptUsernames.size() > 0">
+            AND l.owner_user IN
+            <foreach item="x" collection="salesDeptUsernames" open="(" separator="," close=")">#{x}</foreach>
+        </if>
+        AND (l.remark != '数据导入' OR l.remark IS NULL)
+        AND l.owner_user IS NOT NULL
+        AND l.owner_user != ''
+    </sql>
+
+    <!--
+        纯 SELECT 列片段，不带任何按需 join；可被所有按 id / phone / wechat 等单实例查询安全复用。
+        列表查询额外需要的 join 在 selectLeadList 自己语句里加。
+    -->
+    <sql id="selectLeadVo">
+        select l.id, l.tenant_id, l.lead_name, l.contact_name, l.phone, l.wechat, l.email, l.company_name, l.source, l.status,
+        l.owner_user, l.owner_user_name, l.next_follow_time, l.last_follow_content, l.last_follow_time, l.customer_type,
+        l.create_by, l.create_by_name, l.create_time, l.update_by, l.update_by_name, l.update_time, l.remark,
+        l.deleted, l.is_valid, l.open_id, l.type
+        from sale_lead l
+    </sql>
+
+    <select id="selectLeadList" resultType="com.qykj.finmaster.customer.lead.entity.resp.GetLeadPageResp">
+        <include refid="selectLeadVo"/>
+        <!-- 列表专用按需 join：成交判定 / 沟通次数 -->
+        <if test="params.isTransaction != null">
+            left join customer_info ci on l.id = ci.lead_id
+        </if>
+        <if test="params.followCount != null">
+            left join (select lead_id, count(lead_id) as count from crm_lead_log cll where cll.log_type = 2 GROUP BY lead_id) a on l.id = a.lead_id
+        </if>
+        where 1=1 AND deleted = 0
+            <if test="params.followCount != null">
+                <choose>
+                    <when test="params.followCount == 6">
+                        AND a.count >= 6
+                    </when>
+                    <when test="params.followCount == 0">
+                        AND a.count is null
+                    </when>
+                    <otherwise>
+                        AND a.count = #{params.followCount}
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="params.isTransaction != null">
+                <choose>
+                    <when test="params.isTransaction">
+                        <!-- 线索家族聚合：lead.id 下任一兄弟客户满足条件即视为整线索成交 -->
+                        AND EXISTS (
+                            SELECT 1 FROM customer_info sib
+                            WHERE sib.lead_id = ci.lead_id
+                            AND EXISTS (
+                                SELECT 1 FROM customer_company cc
+                                WHERE cc.customer_id = sib.id AND ( cc.is_verify_tax = 1 OR cc.is_invoicing = 1)
+                            )
+                            AND EXISTS (
+                                SELECT 1 FROM orders o
+                                WHERE o.customer_id = sib.id AND o.status = 'PAID' AND o.order_type = 'NORMAL'
+                            )
+                        )
+                    </when>
+                    <otherwise>
+                        AND NOT EXISTS (
+                            SELECT 1 FROM customer_company cc
+                            WHERE cc.customer_id = ci.id AND ( cc.is_verify_tax = 1 OR cc.is_invoicing = 1)
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM orders o
+                            WHERE o.customer_id = ci.id AND o.status = 'PAID' AND o.order_type = 'NORMAL'
+                        )
+                    </otherwise>
+                </choose>
+            </if>
+            <if test="params.tenantId != null">
+                AND l.tenant_id = #{params.tenantId}
+            </if>
+            <if test="params.companyName != null and params.companyName != ''">
+                AND l.company_name = #{params.companyName}
+            </if>
+            <if test="params.leadName != null and params.leadName != ''">
+                AND l.lead_name like concat('%', #{params.leadName}, '%')
+            </if>
+            <if test="params.contactName != null and params.contactName != ''">
+                AND l.contact_name like concat('%', #{params.contactName}, '%')
+            </if>
+            <if test="params.phone != null and params.phone != ''">
+                AND l.phone like concat('%', #{params.phone}, '%')
+            </if>
+            <if test="params.wechat != null and params.wechat != ''">
+                AND l.wechat like concat('%', #{params.wechat}, '%')
+            </if>
+            <if test="params.source != null">
+                AND l.source = #{params.source}
+            </if>
+            <if test="params.type != null and params.type != ''">
+                AND l.type = #{params.type}
+            </if>
+            <if test="params.status != null">
+                AND l.status = #{params.status}
+            </if>
+            <if test="params.createByName != null and params.createByName != ''">
+                AND l.create_by_name like concat('%', #{params.createByName}, '%')
+            </if>
+            <if test="params.ownerUserName != null and params.ownerUserName != ''">
+                AND l.owner_user_name like concat('%', #{params.ownerUserName}, '%')
+            </if>
+            <if test="params.unassigned != null and params.unassigned == 1">
+                AND (l.owner_user IS NULL OR l.owner_user = '')
+            </if>
+            <if test="params.recyclable != null and params.recyclable == 1">
+                AND l.status IN (1, 2)
+                <!-- recyclableThreshold 由 service 层计算后注入 params -->
+                <if test="params.recyclableThreshold != null">
+                    AND (
+                        (l.last_follow_time IS NOT NULL AND l.last_follow_time &lt; #{params.recyclableThreshold})
+                        OR
+                        (l.last_follow_time IS NULL AND l.create_time &lt; #{params.recyclableThreshold})
+                    )
+                </if>
+                <!-- 与 LeadAutoInvalidateTask 对齐的硬过滤（③④⑤⑥⑧⑨） -->
+                <include refid="leadRecycleHardFilters"/>
+            </if>
+            <!-- 再分配 Tab：被自动回收过（release_count > 0）且当前已重新分配到某负责人（owner_user 非空） -->
+            <if test="params.reassigned != null and params.reassigned == 1">
+                AND l.release_count &gt; 0
+                AND (l.owner_user IS NOT NULL AND l.owner_user != '')
+            </if>
+            <if test="params.isValid != null">
+                AND l.is_valid = #{params.isValid}
+            </if>
+            <if test="params.lastFollowContent != null and params.lastFollowContent != ''">
+                AND l.last_follow_content like concat('%', #{params.lastFollowContent}, '%')
+            </if>
+            <if test="params.beginLastFollowTime != null">
+                AND date_format(l.last_follow_time,'%Y-%m-%d') &gt;= #{params.beginLastFollowTime}
+            </if>
+            <if test="params.endLastFollowTime != null">
+                AND date_format(l.last_follow_time,'%Y-%m-%d') &lt;= #{params.endLastFollowTime}
+            </if>
+            <if test="params.beginCreateTime != null">
+                AND date_format(l.create_time,'%Y-%m-%d') &gt;= #{params.beginCreateTime}
+            </if>
+            <if test="params.endCreateTime != null">
+                AND date_format(l.create_time,'%Y-%m-%d') &lt;= #{params.endCreateTime}
+            </if>
+            <if test="params.dataScopeUserIds != null">
+                and (l.create_by in
+                <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+                or l.owner_user in
+                <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+                )
+            </if>
+        order by l.create_time desc
+    </select>
+
+    <select id="selectLeadListForExport" parameterType="com.qykj.finmaster.customer.lead.entity.Lead" resultMap="LeadResult">
+        <include refid="selectLeadVo"/>
+        <where>
+                deleted = 0
+            <if test="tenantId != null">
+                AND l.tenant_id = #{tenantId}
+            </if>
+            <if test="leadName != null and leadName != ''">
+                AND lead_name like concat('%', #{leadName}, '%')
+            </if>
+            <if test="contactName != null and contactName != ''">
+                AND contact_name like concat('%', #{contactName}, '%')
+            </if>
+            <if test="phone != null and phone != ''">
+                AND phone like concat('%', #{phone}, '%')
+            </if>
+            <if test="wechat != null and wechat != ''">
+                AND wechat like concat('%', #{wechat}, '%')
+            </if>
+            <if test="companyName != null and companyName != ''">
+                AND company_name like concat('%', #{companyName}, '%')
+            </if>
+            <if test="source != null and source != ''">
+                AND source = #{source}
+            </if>
+            <if test="status != null">
+                AND status = #{status}
+            </if>
+            <if test="createByName != null and createByName != ''">
+                AND create_by_name like concat('%', #{createByName}, '%')
+            </if>
+            <if test="ownerUserName != null and ownerUserName != ''">
+                AND owner_user_name like concat('%', #{ownerUserName}, '%')
+            </if>
+            <if test="isValid != null">
+                AND is_valid = #{isValid}
+            </if>
+            <if test="lastFollowContent != null and lastFollowContent != ''">
+                AND last_follow_content like concat('%', #{lastFollowContent}, '%')
+            </if>
+            <if test="beginLastFollowTime != null">
+                AND date_format(last_follow_time,'%Y-%m-%d') &gt;= #{beginLastFollowTime}
+            </if>
+            <if test="endLastFollowTime != null">
+                AND date_format(last_follow_time,'%Y-%m-%d') &lt;= #{endLastFollowTime}
+            </if>
+            <if test="beginCreateTime != null">
+                AND date_format(create_time,'%Y-%m-%d') &gt;= #{beginCreateTime}
+            </if>
+            <if test="endCreateTime != null">
+                AND date_format(create_time,'%Y-%m-%d') &lt;= #{endCreateTime}
+            </if>
+            <if test="dataScopeUserIds != null">
+                and (l.create_by in
+                <foreach item="item" collection="dataScopeUserIds" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+                or l.owner_user in
+                <foreach item="item" collection="dataScopeUserIds" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+                )
+            </if>
+            <!-- 导出时不限制deleted状态，可以导出所有记录 -->
+        </where>
+        order by create_time desc
+    </select>
+
+    <select id="selectLeadById" parameterType="Long" resultMap="LeadResult">
+        <include refid="selectLeadVo"/>
+        <where>
+            id = #{id}
+            <if test="tenantId != null">
+            AND l.tenant_id = #{tenantId}
+            </if>
+        </where>
+
+    </select>
+
+    <select id="selectLeadByPhone" resultMap="LeadResult">
+        <include refid="selectLeadVo"/>
+        <where>
+            phone = #{phone} and deleted = 0
+            <if test="tenantId != null">
+            AND l.tenant_id = #{tenantId}
+            </if>
+        </where>
+    </select>
+
+    <select id="selectLeadByWechat" resultMap="LeadResult">
+        <include refid="selectLeadVo"/>
+        <where>
+            wechat = #{wechat} and deleted = 0
+            <if test="tenantId != null">
+
+            AND l.tenant_id = #{tenantId}
+            </if>
+        </where>
+    </select>
+
+    <select id="exists" resultType="java.lang.Integer">
+        select count(1) from sale_lead where deleted = 0
+        <if test = "params.openId != null and params.openId != ''">
+            and open_id = #{params.openId}
+        </if>
+        <if test = "params.phone != null and params.phone != ''">
+            and phone = #{params.phone}
+        </if>
+    </select>
+
+    <insert id="insertLead" parameterType="com.qykj.finmaster.customer.lead.entity.Lead" useGeneratedKeys="true" keyProperty="id">
+        insert into sale_lead
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="tenantId != null">tenant_id,</if>
+            <if test="leadName != null">lead_name,</if>
+            <if test="contactName != null">contact_name,</if>
+            <if test="phone != null">phone,</if>
+            <if test="wechat != null">wechat,</if>
+            <if test="email != null">email,</if>
+            <if test="companyName != null">company_name,</if>
+            <if test="source != null">source,</if>
+            <if test="status != null">status,</if>
+            <if test="ownerUser != null">owner_user,</if>
+            <if test="ownerUserName != null">owner_user_name,</if>
+            <if test="nextFollowTime != null">next_follow_time,</if>
+            <if test="customerType != null">customer_type,</if>
+            <if test="createBy != null">create_by,</if>
+            <if test="createByName != null">create_by_name,</if>
+            <if test="createTime != null">create_time,</if>
+            <if test="updateBy != null">update_by,</if>
+            <if test="updateByName != null">update_by_name,</if>
+            <if test="updateTime != null">update_time,</if>
+            <if test="remark != null">remark,</if>
+            <if test="deleted != null">deleted,</if>
+            <if test="isValid != null">is_valid,</if>
+            <if test="openId != null">open_id,</if>
+            <if test="type != null">`type`,</if>
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="tenantId != null">#{tenantId},</if>
+            <if test="leadName != null">#{leadName},</if>
+            <if test="contactName != null">#{contactName},</if>
+            <if test="phone != null">#{phone},</if>
+            <if test="wechat != null">#{wechat},</if>
+            <if test="email != null">#{email},</if>
+            <if test="companyName != null">#{companyName},</if>
+            <if test="source != null">#{source},</if>
+            <if test="status != null">#{status},</if>
+            <if test="ownerUser != null">#{ownerUser},</if>
+            <if test="ownerUserName != null">#{ownerUserName},</if>
+            <if test="nextFollowTime != null">#{nextFollowTime},</if>
+            <if test="customerType != null">#{customerType},</if>
+            <if test="createBy != null">#{createBy},</if>
+            <if test="createByName != null">#{createByName},</if>
+            <if test="createTime != null">#{createTime},</if>
+            <if test="updateBy != null">#{updateBy},</if>
+            <if test="updateByName != null">#{updateByName},</if>
+            <if test="updateTime != null">#{updateTime},</if>
+            <if test="remark != null">#{remark},</if>
+            <if test="deleted != null">#{deleted},</if>
+            <if test="isValid != null">#{isValid},</if>
+            <if test="openId != null">#{openId},</if>
+            <if test="type != null">#{type},</if>
+        </trim>
+    </insert>
+
+    <update id="updateLead" parameterType="com.qykj.finmaster.customer.lead.entity.Lead">
+        update sale_lead
+        <set>
+            <if test="leadName != null">lead_name = #{leadName},</if>
+            <if test="contactName != null">contact_name = #{contactName},</if>
+            <if test="phone != null">phone = #{phone},</if>
+            <if test="wechat != null">wechat = #{wechat},</if>
+            <if test="email != null">email = #{email},</if>
+            <if test="companyName != null">company_name = #{companyName},</if>
+            <if test="source != null">source = #{source},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="ownerUser != null">owner_user = #{ownerUser},</if>
+            <if test="ownerUserName != null">owner_user_name = #{ownerUserName},</if>
+            <if test="nextFollowTime != null">next_follow_time = #{nextFollowTime},</if>
+            <if test="lastFollowContent != null">last_follow_content = #{lastFollowContent},</if>
+            <if test="lastFollowTime != null">last_follow_time = #{lastFollowTime},</if>
+            <if test="customerType != null">customer_type = #{customerType},</if>
+            <if test="updateBy != null">update_by = #{updateBy},</if>
+            <if test="updateByName != null">update_by_name = #{updateByName},</if>
+            <if test="remark != null">remark = #{remark},</if>
+            <if test="deleted != null">deleted = #{deleted},</if>
+            <if test="isValid != null">is_valid = #{isValid},</if>
+            <if test="openId != null">open_id = #{openId},</if>
+            <if test="type != null">`type` = #{type},</if>
+            update_time = sysdate()
+        </set>
+        <where>
+            <if test="id != null">
+                id = #{id}
+            </if>
+            <if test="tenantId != null">
+                and tenant_id = #{tenantId}
+            </if>
+        </where>
+    </update>
+
+    <update id="deleteLeadById" parameterType="Long">
+        update sale_lead set deleted = 1
+        <where>
+            id = #{id}
+            <if test="tenantId != null">
+                and tenant_id = #{tenantId}
+            </if>
+        </where>
+    </update>
+
+    <update id="deleteLeadByIds" parameterType="Long">
+        update sale_lead set deleted = 1
+        <where>id in
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        <if test="tenantId != null">
+            AND tenant_id = #{tenantId}
+        </if>
+    </where>
+    </update>
+
+    <update id="assignLead">
+        update sale_lead
+        set owner_user = #{ownerUser},
+            owner_user_name = #{ownerUserName},
+            update_time = sysdate()
+        where id = #{id}
+        <if test="tenantId != null">
+            AND tenant_id = #{tenantId}
+        </if>
+    </update>
+
+    <update id="convertLead">
+        update sale_lead
+        set status = 3,
+            update_by = #{updateBy},
+            update_by_name = #{updateByName},
+            update_time = sysdate()
+        where id = #{id}
+        <if test="tenantId != null">
+            AND tenant_id = #{tenantId}
+        </if>
+    </update>
+    <update id="updateOpenIdByPhone">
+        update sale_lead
+        set open_id = #{openId},
+            update_time = sysdate()
+        where phone = #{phone}
+    </update>
+    <!--
+      释放线索查询：自动回收定时任务专用。
+      所有过滤条件在 SQL 内完成（不再依赖 Java 端二次过滤）。
+      参数说明（通过 params Map 传入）：
+        ★ tenantId         必填：租户 ID
+        ★ noFollowDate     【A 条件】最近跟进 / 创建时间 早于此时间的线索视为"超期未跟进"
+        ★ noOrderDate      【B 条件】创建时间早于此时间的线索视为"超期未签单"
+        ☆ userNameList     可选：仅回收名下线索的人员 username 列表（create_by 或 owner_user 命中）
+        ☆ source           可选：仅回收指定来源的线索
+    -->
+    <select id="getOutLeadList" resultType="com.qykj.finmaster.customer.lead.entity.Lead">
+        SELECT sl.id AS id
+        FROM sale_lead sl
+        LEFT JOIN customer_info ci ON ci.lead_id = sl.id
+        WHERE 1=1
+            <!-- ① 基础前提：未删除、当前租户、未转化（status != 3） -->
+            AND sl.deleted = 0
+            AND sl.tenant_id = #{params.tenantId}
+            AND sl.status != 3
+            <!-- ② 触发条件：A 没跟进 OR B 没签单（任一命中即纳入回收候选） -->
+            AND (
+                <!-- A：超 noFollowDate 没跟进；lastFollowTime 为空时退化为 createTime 比较 -->
+                (sl.last_follow_time IS NOT NULL AND sl.last_follow_time &lt; #{params.noFollowDate})
+                <!-- B：lastFollowTime 为空时 判断超 noOrderDate 没签单, 退化为 , createTime 比较 -->
+                OR
+                (sl.last_follow_time IS NULL     AND sl.create_time     &lt; #{params.noOrderDate})
+                <!--OR
+                &lt;!&ndash; B：超 noOrderDate 没签单（用 create_time 近似判断；NOT EXISTS orders 已经严格排除签单了，这里只需"年限够老"） &ndash;&gt;
+                (sl.create_time &lt; #{params.noOrderDate})-->
+            )
+            <!-- ③ 排除：已转化到私海（customer_info.customer_type=1） -->
+            AND NOT EXISTS (
+                SELECT 1 FROM customer_info ci2
+                WHERE ci2.lead_id = sl.id AND ci2.customer_type = 1
+            )
+            <!-- ④ 排除：客户名下公司已"税号验证"或"开过票"（视为有实际签单/服务） -->
+            AND NOT EXISTS (
+                SELECT 1 FROM customer_company cc
+                WHERE cc.customer_id = ci.id AND ( cc.is_verify_tax = 1 OR cc.is_invoicing = 1)
+            )
+            <!-- ⑤ 排除：客户名下有 PAID + NORMAL 订单（已签单实锤） -->
+            AND NOT EXISTS (
+                SELECT 1 FROM orders o
+                WHERE o.customer_id = ci.id AND o.status = 'PAID' AND o.order_type = 'NORMAL'
+            )
+            <!-- ⑥ 指定人员过滤（销售部成员等场景）：create_by 或 owner_user 命中即可 -->
+            <if test="params.userNameList != null and params.userNameList.size() > 0">
+                AND (sl.create_by IN
+                <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+                OR sl.owner_user IN
+                <foreach item="item" collection="params.userNameList" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+                )
+            </if>
+            <!-- ⑦ 来源过滤（可选） -->
+            <if test="params.source != null and params.source != '' ">
+                AND sl.source = #{params.source}
+            </if>
+            <!-- ⑧ 排除"数据导入"标记的历史脏数据 -->
+            AND (sl.remark != '数据导入' OR sl.remark IS NULL)
+            <!-- ⑨ 必须有 ownerUser（"待分配"池的线索不需要回收） -->
+            AND sl.owner_user IS NOT NULL
+            AND sl.owner_user != ''
+    </select>
+</mapper>

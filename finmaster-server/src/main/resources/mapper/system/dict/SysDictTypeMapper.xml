@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.system.dict.mapper.SysDictTypeMapper">
+    
+    <resultMap type="com.qykj.finmaster.system.dict.entity.SysDictType" id="SysDictTypeResult">
+        <id     property="id"           column="id"            />
+        <result property="name"         column="name"          />
+        <result property="code"         column="code"          />
+        <result property="status"       column="status"        />
+        <result property="remark"       column="remark"        />
+        <result property="createBy"     column="create_by"     />
+        <result property="createTime"   column="create_time"   />
+        <result property="updateBy"     column="update_by"     />
+        <result property="updateTime"   column="update_time"   />
+    </resultMap>
+    
+    <sql id="selectDictTypeVo">
+        select id, name, code, status, remark, create_by, create_time, update_by, update_time
+        from sys_dict_type
+    </sql>
+    
+    <select id="selectByCode" parameterType="String" resultMap="SysDictTypeResult">
+        <include refid="selectDictTypeVo"/>
+        where code = #{code}
+    </select>
+
+    <select id="selectDictTypeList" resultType="com.qykj.finmaster.system.dict.entity.resp.GetDictTypePageResp">
+        <include refid="selectDictTypeVo"/>
+        <where>
+            <if test="params.name != null and params.name != ''">
+                AND name like concat('%', #{params.name}, '%')
+            </if>
+            <if test="params.code != null and params.code != ''">
+                AND code like concat('%', #{params.code}, '%')
+            </if>
+        </where>
+        order by id asc
+    </select>
+    
+</mapper> 

@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.analytics.lead.mapper.LeadAnalyticsMapper">
+
+    <!--
+        sale_lead scope 过滤：
+          PERSONAL — owner_user = 我，或 owner_user IS NULL 且 create_by = 我
+          TEAM    — owner_user IN 团队 或 create_by IN 团队
+          COMPANY — 仅租户
+    -->
+    <sql id="scopeFilterByUsername">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() == "PERSONAL" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND (
+                t.owner_user IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                OR (t.owner_user IS NULL AND t.create_by IN
+                    <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                )
+            )
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() == "TEAM" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND (
+                t.owner_user IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                OR t.create_by IN
+                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+            )
+        </if>
+    </sql>
+
+    <select id="funnelCounts" resultType="java.util.Map">
+        SELECT t.status AS status, COUNT(*) AS count
+        FROM sale_lead t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="scopeFilterByUsername"/>
+        GROUP BY t.status
+    </select>
+
+    <select id="countTotal" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM sale_lead t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="scopeFilterByUsername"/>
+    </select>
+
+    <!--
+        区间内"发生转化"的线索数（按 crm_lead_log log_type=4 的时间，而非 sale_lead.create_time）。
+        这样同期对比和"转化趋势"的口径才一致。
+    -->
+    <select id="countConverted" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT lg.lead_id)
+        FROM crm_lead_log lg
+        INNER JOIN sale_lead t ON t.id = lg.lead_id AND t.deleted = 0
+        WHERE lg.log_type = 4
+          AND lg.create_time &gt;= #{start}
+          AND lg.create_time &lt;= #{end}
+        <include refid="scopeFilterByUsername"/>
+    </select>
+
+    <select id="sourceRoi" resultType="com.qykj.finmaster.analytics.lead.dto.LeadAnalyticsResp$SourceRoiItem">
+        SELECT
+            COALESCE(t.source, 'UNKNOWN') AS source,
+            COALESCE(t.source, 'UNKNOWN') AS sourceLabel,
+            COUNT(*) AS leadCount,
+            SUM(CASE WHEN t.status = 3 THEN 1 ELSE 0 END) AS convertedCount,
+            CASE WHEN COUNT(*) = 0 THEN 0
+                 ELSE ROUND(SUM(CASE WHEN t.status = 3 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2)
+            END AS conversionRate,
+            COALESCE((
+                SELECT SUM(o.total_amount)
+                FROM customer_info ci
+                INNER JOIN orders o
+                    ON o.customer_id = ci.id
+                    AND o.status = 'PAID'
+                    AND (o.order_type IS NULL OR o.order_type = 'NORMAL')
+                    AND o.pay_time IS NOT NULL
+                    AND o.pay_time &gt;= #{start}
+                    AND o.pay_time &lt;= #{end}
+                WHERE ci.lead_id IN (
+                      SELECT tx.id FROM sale_lead tx
+                      WHERE tx.deleted = 0
+                        AND COALESCE(tx.source, 'UNKNOWN') = COALESCE(t.source, 'UNKNOWN')
+                        AND tx.create_time &gt;= #{start}
+                        AND tx.create_time &lt;= #{end}
+                        <if test="ctx.tenantId != null">
+                            AND tx.tenant_id = #{ctx.tenantId}
+                        </if>
+                        <if test='ctx.scope != null and ctx.scope.name() == "PERSONAL" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+                            AND (
+                                tx.owner_user IN
+                                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                                OR (tx.owner_user IS NULL AND tx.create_by IN
+                                    <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                                )
+                            )
+                        </if>
+                        <if test='ctx.scope != null and ctx.scope.name() == "TEAM" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+                            AND (
+                                tx.owner_user IN
+                                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                                OR tx.create_by IN
+                                <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+                            )
+                        </if>
+                  )
+            ), 0) AS orderAmount
+        FROM sale_lead t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="scopeFilterByUsername"/>
+        GROUP BY t.source
+        ORDER BY leadCount DESC
+    </select>
+
+    <!-- 首次响应时长分桶（小时）：基于 lead.create_time 到第一条 log_type=2 的 log.create_time -->
+    <select id="firstResponseBuckets" resultType="java.util.Map">
+        SELECT bucket AS label, COUNT(*) AS count FROM (
+            SELECT CASE
+                WHEN hours &lt; 1 THEN '&lt;1h'
+                WHEN hours &lt; 4 THEN '1-4h'
+                WHEN hours &lt; 24 THEN '4-24h'
+                WHEN hours &lt; 72 THEN '1-3d'
+                WHEN hours &lt; 168 THEN '3-7d'
+                ELSE '7d+'
+            END AS bucket
+            FROM (
+                SELECT TIMESTAMPDIFF(MINUTE, t.create_time, MIN(lg.create_time)) / 60.0 AS hours
+                FROM sale_lead t
+                INNER JOIN crm_lead_log lg
+                    ON lg.lead_id = t.id
+                    AND lg.log_type = 2
+                WHERE t.deleted = 0
+                  AND t.create_time &gt;= #{start}
+                  AND t.create_time &lt;= #{end}
+                <include refid="scopeFilterByUsername"/>
+                GROUP BY t.id, t.create_time
+            ) AS lead_hours
+            WHERE hours IS NOT NULL
+        ) AS bucketed
+        GROUP BY bucket
+    </select>
+
+    <select id="avgFirstResponseHours" resultType="java.math.BigDecimal">
+        SELECT COALESCE(ROUND(AVG(hours), 2), 0) FROM (
+            SELECT TIMESTAMPDIFF(MINUTE, t.create_time, MIN(lg.create_time)) / 60.0 AS hours
+            FROM sale_lead t
+            INNER JOIN crm_lead_log lg
+                ON lg.lead_id = t.id
+                AND lg.log_type = 2
+            WHERE t.deleted = 0
+              AND t.create_time &gt;= #{start}
+              AND t.create_time &lt;= #{end}
+            <include refid="scopeFilterByUsername"/>
+            GROUP BY t.id, t.create_time
+        ) AS h
+    </select>
+
+    <!--
+        平均转化周期（天）：对每个线索取 MIN(转化 log 时间) - 线索创建时间。
+        按 log 时间落在区间统计 —— 与 countConverted 口径一致。
+    -->
+    <select id="avgConversionDays" resultType="java.math.BigDecimal">
+        SELECT COALESCE(ROUND(AVG(TIMESTAMPDIFF(HOUR, t.create_time, lg_first.convert_at) / 24.0), 2), 0)
+        FROM sale_lead t
+        INNER JOIN (
+            SELECT lead_id, MIN(create_time) AS convert_at
+            FROM crm_lead_log
+            WHERE log_type = 4
+            GROUP BY lead_id
+        ) lg_first ON lg_first.lead_id = t.id
+        WHERE t.deleted = 0
+          AND lg_first.convert_at &gt;= #{start}
+          AND lg_first.convert_at &lt;= #{end}
+        <include refid="scopeFilterByUsername"/>
+    </select>
+
+    <select id="avgFollowUpCount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(ROUND(AVG(cnt), 2), 0) FROM (
+            SELECT (
+                SELECT COUNT(*)
+                FROM crm_lead_log lg
+                WHERE lg.lead_id = t.id AND lg.log_type = 2
+            ) AS cnt
+            FROM sale_lead t
+            WHERE t.deleted = 0
+              AND t.create_time &gt;= #{start}
+              AND t.create_time &lt;= #{end}
+            <include refid="scopeFilterByUsername"/>
+        ) AS c
+    </select>
+
+    <select id="newLeadsTrendByDay" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.create_time, '%m-%d') AS label,
+               COUNT(*) AS count
+        FROM sale_lead t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="scopeFilterByUsername"/>
+        GROUP BY DATE_FORMAT(t.create_time, '%m-%d'), DATE(t.create_time)
+        ORDER BY DATE(t.create_time)
+    </select>
+
+    <select id="newLeadsTrendByMonth" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.create_time, '%Y-%m') AS label,
+               COUNT(*) AS count
+        FROM sale_lead t
+        WHERE t.deleted = 0
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+        <include refid="scopeFilterByUsername"/>
+        GROUP BY DATE_FORMAT(t.create_time, '%Y-%m')
+        ORDER BY label
+    </select>
+
+    <!--
+        转化趋势：按 crm_lead_log log_type=4 的创建时间分桶。
+        一条线索若被多次标"转化"只算一次（MIN）。
+    -->
+    <select id="convertedTrendByDay" resultType="java.util.Map">
+        SELECT DATE_FORMAT(convert_at, '%m-%d') AS label, COUNT(*) AS count
+        FROM (
+            SELECT t.id, MIN(lg.create_time) AS convert_at
+            FROM sale_lead t
+            INNER JOIN crm_lead_log lg ON lg.lead_id = t.id AND lg.log_type = 4
+            WHERE t.deleted = 0
+            <include refid="scopeFilterByUsername"/>
+            GROUP BY t.id
+            HAVING convert_at &gt;= #{start} AND convert_at &lt;= #{end}
+        ) AS c
+        GROUP BY DATE_FORMAT(convert_at, '%m-%d'), DATE(convert_at)
+        ORDER BY DATE(convert_at)
+    </select>
+
+    <select id="convertedTrendByMonth" resultType="java.util.Map">
+        SELECT DATE_FORMAT(convert_at, '%Y-%m') AS label, COUNT(*) AS count
+        FROM (
+            SELECT t.id, MIN(lg.create_time) AS convert_at
+            FROM sale_lead t
+            INNER JOIN crm_lead_log lg ON lg.lead_id = t.id AND lg.log_type = 4
+            WHERE t.deleted = 0
+            <include refid="scopeFilterByUsername"/>
+            GROUP BY t.id
+            HAVING convert_at &gt;= #{start} AND convert_at &lt;= #{end}
+        ) AS c
+        GROUP BY DATE_FORMAT(convert_at, '%Y-%m')
+        ORDER BY label
+    </select>
+
+</mapper>

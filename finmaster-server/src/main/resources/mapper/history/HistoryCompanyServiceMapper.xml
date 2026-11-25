@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.qykj.finmaster.history.mapper.HistoryCompanyServiceMapper">
+
+    <resultMap id="HistoryCompanyServiceDateRangeMap"
+               type="com.qykj.finmaster.history.HistoryCompanyServiceDateRange">
+        <result property="effectiveDate" column="effective_date"/>
+        <result property="actualEndDate" column="actual_end_date"/>
+    </resultMap>
+
+    <!--
+        根据公司 + 业务（通过业务关联的产品）获取公司服务的生效/实际截止日期范围
+        说明：
+        - 历史数据中 company_service.business_id 实际存的是 product_id
+        - 先通过 sys_business_product 查出该业务关联的所有 product_id
+        - 再在 company_service 中按 company_id + business_id in (product_id 列表) 聚合
+    -->
+    <select id="selectServiceDateRangeByCompanyAndBusiness"
+            resultMap="HistoryCompanyServiceDateRangeMap">
+        SELECT
+            MIN(cs.effective_date)   AS effective_date,
+            MAX(cs.actual_end_date)  AS actual_end_date
+        FROM company_service cs
+                 JOIN sys_business_product sbp
+                      ON cs.business_id = sbp.product_id
+        WHERE cs.deleted = 0
+          AND sbp.deleted = 0
+          AND cs.company_id = #{companyId}
+          AND sbp.business_id = #{businessId}
+          <if test="tenantId != null">
+              AND sbp.tenant_id = #{tenantId}
+          </if>
+    </select>
+
+</mapper>
+

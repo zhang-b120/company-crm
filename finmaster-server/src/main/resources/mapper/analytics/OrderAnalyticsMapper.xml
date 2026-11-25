@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.analytics.order.mapper.OrderAnalyticsMapper">
+
+    <sql id="scopeFilterByCreateBy">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userNameList != null and ctx.userNameList.size() > 0'>
+            AND t.create_by IN
+            <foreach item="u" collection="ctx.userNameList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <!-- 正常订单：已支付、非退款，按 pay_time 落区间（真实成交时间） -->
+    <sql id="normalOrderFilter">
+        t.status = 'PAID'
+          AND (t.order_type IS NULL OR t.order_type = 'NORMAL')
+          AND t.pay_time IS NOT NULL
+          AND t.pay_time &gt;= #{start}
+          AND t.pay_time &lt;= #{end}
+    </sql>
+
+    <!-- 退款订单：退款单本身没有 pay_time，按 create_time（退款发起时间）过滤 -->
+    <sql id="refundOrderFilter">
+        t.order_type = 'REFUND'
+          AND t.create_time &gt;= #{start}
+          AND t.create_time &lt;= #{end}
+    </sql>
+
+    <!-- ===== Summary ===== -->
+
+    <select id="sumAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(t.total_amount), 0)
+        FROM orders t
+        WHERE <include refid="normalOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="countOrders" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM orders t
+        WHERE <include refid="normalOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="countDealCustomers" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT t.customer_id)
+        FROM orders t
+        WHERE <include refid="normalOrderFilter"/>
+          AND t.customer_id IS NOT NULL
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="trendByDay" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.pay_time, '%m-%d') AS label,
+               COALESCE(SUM(t.total_amount), 0) AS value,
+               COUNT(*) AS count
+        FROM orders t
+        WHERE <include refid="normalOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY DATE_FORMAT(t.pay_time, '%m-%d'), DATE(t.pay_time)
+        ORDER BY DATE(t.pay_time)
+    </select>
+
+    <select id="trendByMonth" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.pay_time, '%Y-%m') AS label,
+               COALESCE(SUM(t.total_amount), 0) AS value,
+               COUNT(*) AS count
+        FROM orders t
+        WHERE <include refid="normalOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY DATE_FORMAT(t.pay_time, '%Y-%m')
+        ORDER BY label
+    </select>
+
+    <select id="productMix" resultType="com.qykj.finmaster.analytics.order.dto.OrderAnalyticsResp$ProductMixItem">
+        SELECT
+            COALESCE(od.product_name, '未知产品') AS productName,
+            COUNT(DISTINCT t.id) AS orderCount,
+            COALESCE(SUM(od.amount), 0) AS amount
+        FROM orders t
+        INNER JOIN order_details od ON od.order_id = t.id
+        WHERE <include refid="normalOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY od.product_name
+        ORDER BY amount DESC
+        LIMIT 20
+    </select>
+
+    <select id="salesAttribution" resultType="com.qykj.finmaster.analytics.order.dto.OrderAnalyticsResp$SalesAttribution">
+        SELECT
+            t.create_by AS username,
+            COALESCE(su.real_name, t.create_by_name, t.create_by) AS realName,
+            COUNT(*) AS orderCount,
+            COALESCE(SUM(t.total_amount), 0) AS amount
+        FROM orders t
+        LEFT JOIN sys_user su ON su.username = t.create_by AND su.deleted = 0
+        WHERE <include refid="normalOrderFilter"/>
+          AND t.create_by IS NOT NULL
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY t.create_by, realName
+        ORDER BY amount DESC
+        LIMIT 20
+    </select>
+
+    <select id="detailTypeDist" resultType="com.qykj.finmaster.analytics.order.dto.OrderAnalyticsResp$DetailTypeItem">
+        SELECT
+            COALESCE(od.order_detail_type, 'OTHER') AS type,
+            COALESCE(od.order_detail_type, 'OTHER') AS typeLabel,
+            COUNT(DISTINCT t.id) AS orderCount,
+            COALESCE(SUM(od.amount), 0) AS amount
+        FROM orders t
+        INNER JOIN order_details od ON od.order_id = t.id
+        WHERE <include refid="normalOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY od.order_detail_type
+    </select>
+
+    <!-- ===== Refund ===== -->
+
+    <select id="sumNormalAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(t.total_amount), 0)
+        FROM orders t
+        WHERE <include refid="normalOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="countNormalOrders" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM orders t
+        WHERE <include refid="normalOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="sumRefundAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(t.total_amount), 0)
+        FROM orders t
+        WHERE <include refid="refundOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="countRefundOrders" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM orders t
+        WHERE <include refid="refundOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+    </select>
+
+    <select id="refundTrendByDay" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.create_time, '%m-%d') AS label,
+               COALESCE(SUM(t.total_amount), 0) AS value,
+               COUNT(*) AS count
+        FROM orders t
+        WHERE <include refid="refundOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY DATE_FORMAT(t.create_time, '%m-%d'), DATE(t.create_time)
+        ORDER BY DATE(t.create_time)
+    </select>
+
+    <select id="refundTrendByMonth" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.create_time, '%Y-%m') AS label,
+               COALESCE(SUM(t.total_amount), 0) AS value,
+               COUNT(*) AS count
+        FROM orders t
+        WHERE <include refid="refundOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY DATE_FORMAT(t.create_time, '%Y-%m')
+        ORDER BY label
+    </select>
+
+    <select id="sourceAttribution" resultType="com.qykj.finmaster.analytics.order.dto.OrderAnalyticsResp$SourceAttributionItem">
+        SELECT
+            COALESCE(sl.source, 'UNKNOWN') AS source,
+            COALESCE(sl.source, 'UNKNOWN') AS sourceLabel,
+            COUNT(t.id) AS orderCount,
+            COALESCE(SUM(t.total_amount), 0) AS orderAmount
+        FROM orders t
+        LEFT JOIN customer_info ci ON ci.id = t.customer_id
+        LEFT JOIN sale_lead sl ON sl.id = ci.lead_id AND sl.deleted = 0
+        WHERE <include refid="normalOrderFilter"/>
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY sl.source
+        ORDER BY orderAmount DESC
+    </select>
+
+    <select id="refundByOwner" resultType="com.qykj.finmaster.analytics.order.dto.OrderAnalyticsResp$RefundOwnerItem">
+        SELECT
+            t.create_by AS username,
+            COALESCE(su.real_name, t.create_by_name, t.create_by) AS realName,
+            COUNT(*) AS refundCount,
+            COALESCE(SUM(t.total_amount), 0) AS refundAmount
+        FROM orders t
+        LEFT JOIN sys_user su ON su.username = t.create_by AND su.deleted = 0
+        WHERE <include refid="refundOrderFilter"/>
+          AND t.create_by IS NOT NULL
+        <include refid="scopeFilterByCreateBy"/>
+        GROUP BY t.create_by, realName
+        ORDER BY refundAmount DESC
+        LIMIT 20
+    </select>
+
+</mapper>

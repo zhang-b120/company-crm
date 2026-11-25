@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.system.product.mapper.ProductMapper">
+
+    <resultMap type="com.qykj.finmaster.system.product.domain.Product" id="ProductResult">
+        <id property="id" column="id"/>
+        <result property="tenantId" column="tenant_id"/>
+        <result property="productName" column="product_name"/>
+        <result property="productNumber" column="product_number"/>
+        <result property="productType" column="product_type"/>
+        <result property="unit" column="unit"/>
+        <result property="specification" column="specification"/>
+        <result property="unitPrice" column="unit_price"/>
+        <result property="maxDiscount" column="max_discount"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+        <result property="remark" column="remark"/>
+    </resultMap>
+
+    <sql id="selectProductVo">
+        select id,
+               tenant_id,
+               product_name,
+               product_number,
+               product_type,
+               unit,
+               specification,
+               unit_price,
+               max_discount,
+               create_by,
+               create_time,
+               update_by,
+               update_time,
+               remark
+        from product_info
+    </sql>
+
+    <select id="selectProductList" resultType="com.qykj.finmaster.system.product.domain.req.GetProductionPageReq">
+        select
+        id AS id,
+        tenant_id AS tenantId,
+        product_name AS productName,
+        product_number AS productNumber,
+        product_type AS productType,
+        unit AS unit,
+        specification AS specification,
+        unit_price AS unitPrice,
+        max_discount AS maxDiscount,
+        create_by AS createBy,
+        create_time AS createTime,
+        update_by AS updateBy,
+        update_time AS updateTime,
+        remark AS remark
+        from product_info
+        <where>
+            <!-- 不限制租户，查询所有产品 -->
+            <!-- <if test="tenantId != null">
+                AND tenant_id = #{tenantId}
+            </if> -->
+            <if test="params.productName != null and params.productName != ''">
+                AND product_name like concat('%', #{params.productName}, '%')
+            </if>
+            <if test="params.specification != null and params.specification != ''">
+                and specification like concat('%', #{params.specification}, '%')
+            </if>
+            <if test="params.productNumber != null and params.productNumber != ''">
+                AND product_number like concat('%', #{params.productNumber}, '%')
+            </if>
+            <if test="params.productType != null and params.productType != ''">
+                AND product_type = #{params.productType}
+            </if>
+        </where>
+    </select>
+
+    <select id="selectByProductName" parameterType="String" resultMap="ProductResult">
+        <include refid="selectProductVo"/>
+        where product_name = #{productName}
+    </select>
+
+    <select id="selectByProductNumber" parameterType="String" resultMap="ProductResult">
+        <include refid="selectProductVo"/>
+        where product_number = #{productNumber}
+    </select>
+
+    <select id="selectByProductNameExcludeId" resultMap="ProductResult">
+        <include refid="selectProductVo"/>
+        where product_name = #{productName} and id != #{id}
+    </select>
+
+    <select id="selectProductById" parameterType="Long" resultMap="ProductResult">
+        <include refid="selectProductVo"/>
+        where id = #{id}
+    </select>
+
+    <insert id="insertProduct"  useGeneratedKeys="true" keyProperty="id">
+        insert into product_info (tenant_id,
+                                  product_name,
+                                  product_number,
+                                  product_type,
+                                  unit,
+                                  specification,
+                                  unit_price,
+                                  max_discount,
+                                  create_by,
+                                  create_time,
+                                  update_by,
+                                  update_time,
+                                  remark)
+        values (#{params.tenantId},
+                #{params.productName},
+                #{params.productNumber},
+                #{params.productType},
+                #{params.unit},
+                #{params.specification},
+                #{params.unitPrice},
+                #{params.maxDiscount},
+                #{params.createBy},
+                sysdate(),
+                #{params.updateBy},
+                sysdate(),
+                #{params.remark})
+    </insert>
+
+    <update id="updateProduct" parameterType="Product">
+        update product_info
+        <set>
+            <if test="productName != null">product_name = #{productName},</if>
+            <if test="productNumber != null">product_number = #{productNumber},</if>
+            <if test="productType != null">product_type = #{productType},</if>
+            <if test="unit != null">unit = #{unit},</if>
+            <if test="specification != null">specification = #{specification},</if>
+            <if test="unitPrice != null">unit_price = #{unitPrice},</if>
+            <if test="maxDiscount != null">max_discount = #{maxDiscount},</if>
+            <if test="updateBy != null">update_by = #{updateBy},</if>
+            update_time = sysdate(),
+            <if test="remark != null">remark = #{remark},</if>
+        </set>
+        where id = #{id}
+    </update>
+
+    <delete id="deleteProductById" parameterType="Long">
+        delete
+        from product_info
+        where id = #{id}
+    </delete>
+
+    <delete id="deleteProductByIds" parameterType="String">
+        delete from product_info where id in
+        <foreach item="id" collection="array" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+    <delete id="deleteAllProducts">
+        delete
+        from product_info
+    </delete>
+
+    <delete id="deleteProductsByTenantId" parameterType="Long">
+        delete
+        from product_info
+        where tenant_id = #{tenantId}
+    </delete>
+</mapper>

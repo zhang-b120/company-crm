@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.analytics.call.mapper.CallAnalyticsMapper">
+
+    <sql id="scopeFilterByCallerId">
+        <if test="ctx.tenantId != null">
+            AND t.tenant_id = #{ctx.tenantId}
+        </if>
+        <if test='ctx.scope != null and ctx.scope.name() != "COMPANY" and ctx.userIdList != null and ctx.userIdList.size() > 0'>
+            AND t.caller_user_id IN
+            <foreach item="u" collection="ctx.userIdList" open="(" separator="," close=")">#{u}</foreach>
+        </if>
+    </sql>
+
+    <select id="countTotal" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM call_record t
+        WHERE t.deleted = 0
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+    </select>
+
+    <select id="countConnected" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM call_record t
+        WHERE t.deleted = 0
+          AND t.call_status = 2
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+    </select>
+
+    <select id="countNotConnected" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM call_record t
+        WHERE t.deleted = 0
+          AND t.call_status = 3
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+    </select>
+
+    <select id="sumDuration" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(t.call_duration), 0)
+        FROM call_record t
+        WHERE t.deleted = 0
+          AND t.call_status = 2
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+    </select>
+
+    <select id="avgDuration" resultType="java.math.BigDecimal">
+        SELECT COALESCE(ROUND(AVG(t.call_duration), 2), 0)
+        FROM call_record t
+        WHERE t.deleted = 0
+          AND t.call_status = 2
+          AND t.call_duration IS NOT NULL
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+    </select>
+
+    <select id="countQualityDone" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM call_record t
+        WHERE t.deleted = 0
+          AND t.call_status = 2
+          AND t.quality_status = 2
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+    </select>
+
+    <select id="avgQualityScore" resultType="java.math.BigDecimal">
+        SELECT COALESCE(ROUND(AVG(t.quality_score), 2), 0)
+        FROM call_record t
+        WHERE t.deleted = 0
+          AND t.quality_status = 2
+          AND t.quality_score IS NOT NULL
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+    </select>
+
+    <select id="trendByDay" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.call_start_time, '%m-%d') AS label,
+               COUNT(*) AS count
+        FROM call_record t
+        WHERE t.deleted = 0
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+        GROUP BY DATE_FORMAT(t.call_start_time, '%m-%d'), DATE(t.call_start_time)
+        ORDER BY DATE(t.call_start_time)
+    </select>
+
+    <select id="trendByMonth" resultType="java.util.Map">
+        SELECT DATE_FORMAT(t.call_start_time, '%Y-%m') AS label,
+               COUNT(*) AS count
+        FROM call_record t
+        WHERE t.deleted = 0
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+        GROUP BY DATE_FORMAT(t.call_start_time, '%Y-%m')
+        ORDER BY label
+    </select>
+
+    <select id="ranking" resultType="com.qykj.finmaster.analytics.call.dto.CallAnalyticsResp$RankingItem">
+        SELECT
+            t.caller_user_id AS callerUserId,
+            COALESCE(MAX(su.real_name), MAX(t.caller_user_name)) AS callerUserName,
+            COUNT(*) AS totalCalls,
+            SUM(CASE WHEN t.call_status = 2 THEN 1 ELSE 0 END) AS connected,
+            CASE WHEN SUM(CASE WHEN t.call_status IN (2, 3) THEN 1 ELSE 0 END) = 0 THEN 0
+                 ELSE ROUND(
+                    SUM(CASE WHEN t.call_status = 2 THEN 1 ELSE 0 END) * 100.0 /
+                    SUM(CASE WHEN t.call_status IN (2, 3) THEN 1 ELSE 0 END), 2)
+            END AS connectedRate,
+            COALESCE(SUM(CASE WHEN t.call_status = 2 THEN t.call_duration ELSE 0 END), 0) AS totalDurationSec,
+            COALESCE(ROUND(AVG(CASE WHEN t.call_status = 2 AND t.call_duration IS NOT NULL THEN t.call_duration END), 2), 0) AS avgDurationSec,
+            COALESCE(ROUND(AVG(CASE WHEN t.quality_status = 2 AND t.quality_score IS NOT NULL THEN t.quality_score END), 2), 0) AS avgQualityScore
+        FROM call_record t
+        LEFT JOIN sys_user su ON su.id = t.caller_user_id AND su.deleted = 0
+        WHERE t.deleted = 0
+          AND t.caller_user_id IS NOT NULL
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+        GROUP BY t.caller_user_id
+        ORDER BY totalCalls DESC
+        LIMIT 30
+    </select>
+
+    <select id="lowScoreCalls" resultType="com.qykj.finmaster.analytics.call.dto.CallAnalyticsResp$LowScoreCall">
+        SELECT
+            t.id,
+            t.caller_user_id AS callerUserId,
+            t.caller_user_name AS callerUserName,
+            t.contact_name AS contactName,
+            t.phone_number AS phoneNumber,
+            t.call_duration AS callDuration,
+            t.quality_score AS qualityScore,
+            t.call_start_time AS callStartTime,
+            t.recording_url AS recordingUrl
+        FROM call_record t
+        WHERE t.deleted = 0
+          AND t.quality_status = 2
+          AND t.quality_score IS NOT NULL
+          AND t.call_start_time &gt;= #{start}
+          AND t.call_start_time &lt;= #{end}
+        <include refid="scopeFilterByCallerId"/>
+        ORDER BY t.quality_score ASC, t.call_start_time DESC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

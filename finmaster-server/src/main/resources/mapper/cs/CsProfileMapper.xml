@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.cs.profile.mapper.CsProfileMapper">
+
+    <!--
+        客户档案分页查询 SQL：
+        1. customer_company 作为主表（过滤：在合同表中存在"代账报税-正式"或"代账报税-体验"的合同）
+        2. LEFT JOIN customer_info          — 联系人姓名/手机号
+        3. LEFT JOIN cs_customer_profile    — 做账状态/申报状态/星级/备注
+        4. LEFT JOIN financial.fxy_financial_account_sets — 会计类型/个税密码
+    -->
+    <select id="getProfilePage" resultType="com.qykj.finmaster.cs.profile.domain.resp.ProfilePageResp">
+        SELECT
+            cc.id                   AS company_id,
+            cc.company_name,
+            cc.tax_number,
+            cc.is_individual,
+            ci.customer_name        AS contact_name,
+            ci.phone,
+            csp.id                  AS profile_id,
+            csp.bookkeeping_status,
+            csp.filing_status,
+            csp.star_level,
+            csp.remark,
+            fas.id                  AS account_set_id,
+            fas.vat_type,
+            fas.individual_tax_code
+        FROM customer_company cc
+        LEFT JOIN customer_info ci
+            ON ci.id = cc.customer_id
+        LEFT JOIN cs_customer_profile csp
+            ON csp.company_id = cc.id AND csp.deleted = 0
+        LEFT JOIN financial.fxy_financial_account_sets fas
+            ON fas.credit_code = cc.tax_number
+        WHERE cc.tenant_id = #{tenantId}
+          AND cc.deleted = 0
+          AND EXISTS (
+              SELECT 1
+              FROM contract c
+              INNER JOIN sys_business sb
+                  ON sb.id = c.business_id AND sb.deleted = 0
+                  AND sb.business_name IN ('代账报税-正式', '代账报税-体验')
+              WHERE c.company_id = cc.id
+                AND c.deleted = 0
+                AND c.tenant_id = #{tenantId}
+          )
+        <if test="req.companyName != null and req.companyName != ''">
+            AND cc.company_name LIKE CONCAT('%', #{req.companyName}, '%')
+        </if>
+        <if test="req.contactName != null and req.contactName != ''">
+            AND ci.customer_name LIKE CONCAT('%', #{req.contactName}, '%')
+        </if>
+        <if test="req.phone != null and req.phone != ''">
+            AND ci.phone LIKE CONCAT('%', #{req.phone}, '%')
+        </if>
+        ORDER BY cc.create_time DESC
+    </select>
+
+</mapper>

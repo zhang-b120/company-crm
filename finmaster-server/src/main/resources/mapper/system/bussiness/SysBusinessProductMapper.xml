@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.system.bussiness.mapper.SysBusinessProductMapper">
+
+    <resultMap id="BusinessProductResult" type="com.qykj.finmaster.system.bussiness.domain.resp.GetBusinessProductResp">
+        <id     property="id"           column="id"/>
+        <result property="businessId"   column="business_id"/>
+        <result property="productId"    column="product_id"/>
+        <result property="productName"  column="product_name"/>
+        <result property="productNumber" column="product_number"/>
+    </resultMap>
+
+    <select id="getProductListByBusinessId" resultMap="BusinessProductResult">
+        SELECT
+            sbp.id,
+            sbp.business_id,
+            sbp.product_id,
+            p.product_name,
+            p.product_number
+        FROM sys_business_product sbp
+                 LEFT JOIN product_info p ON sbp.product_id = p.id
+        WHERE sbp.deleted = 0
+          AND sbp.business_id = #{businessId}
+    </select>
+
+    <select id="getProductListByBusinessIdList" resultMap="BusinessProductResult">
+        SELECT
+            sbp.id,
+            sbp.business_id,
+            sbp.product_id,
+            p.product_name,
+            p.product_number
+        FROM sys_business_product sbp
+                 LEFT JOIN product_info p ON sbp.product_id = p.id
+        WHERE sbp.deleted = 0
+        <if test="businessIdList != null and businessIdList.size() > 0">
+            AND sbp.business_id IN
+            <foreach item="item" collection="businessIdList" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+        </if>
+    </select>
+
+</mapper>
+

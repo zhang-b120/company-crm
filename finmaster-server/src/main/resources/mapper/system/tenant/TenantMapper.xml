@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.system.tenant.mapper.TenantMapper">
+
+    <resultMap type="com.qykj.finmaster.system.tenant.entity.Tenant" id="TenantResult">
+        <id     property="id"           column="id"            />
+        <result property="tenantCode"   column="tenant_code"   />
+        <result property="tenantName"   column="tenant_name"   />
+        <result property="contactPerson" column="contact_person" />
+        <result property="contactPhone" column="contact_phone" />
+        <result property="contactEmail" column="contact_email" />
+        <result property="address"      column="address"       />
+        <result property="businessLicense" column="business_license" />
+        <result property="status"       column="status"        />
+        <result property="expireTime"   column="expire_time"   />
+        <result property="maxUserCount" column="max_user_count" />
+        <result property="maxStorageSize" column="max_storage_size" />
+        <result property="logoUrl"      column="logo_url"      />
+        <result property="domain"       column="domain"        />
+        <!-- 新增管理员相关字段 -->
+        <result property="createBy"     column="create_by"     />
+        <result property="createTime"   column="create_time"   />
+        <result property="updateBy"     column="update_by"     />
+        <result property="updateTime"   column="update_time"   />
+        <result property="createByName" column="create_by_name" />
+        <result property="updateByName" column="update_by_name" />
+        <result property="remark"       column="remark"        />
+        <result property="deleted"      column="deleted"       />
+    </resultMap>
+
+    <sql id="selectTenantVo">
+        select id, tenant_code, tenant_name, contact_person, contact_phone, contact_email, 
+               address, business_license, status, expire_time, max_user_count, max_storage_size,
+               logo_url, domain,  create_by, create_time,
+               update_by, update_time, create_by_name, update_by_name, remark, deleted
+        from sys_tenant
+    </sql>
+
+    <select id="selectTenantPage" resultType="com.qykj.finmaster.system.tenant.entity.resp.GetTenantPageResp">
+        <include refid="selectTenantVo"/>
+        <where>
+            deleted = 0
+            <if test="params.cid != null">
+                AND id = #{params.id}
+            </if>
+            <if test="params.tenantCode != null and params.tenantCode != ''">
+                AND tenant_code like concat('%', #{params.tenantCode}, '%')
+            </if>
+            <if test="params.tenantName != null and params.tenantName != ''">
+                AND tenant_name like concat('%', #{params.tenantName}, '%')
+            </if>
+            <if test="params.status != null">
+                AND status = #{params.status}
+            </if>
+        </where>
+        order by create_time desc
+    </select>
+
+    <select id="selectByTenantCode" parameterType="String" resultMap="TenantResult">
+        <include refid="selectTenantVo"/>
+        where tenant_code = #{tenantCode} and deleted = 0
+    </select>
+
+    <select id="selectByTenantCodeExcludeId" resultMap="TenantResult">
+        <include refid="selectTenantVo"/>
+        where tenant_code = #{tenantCode} and id != #{id} and deleted = 0
+    </select>
+
+</mapper> 

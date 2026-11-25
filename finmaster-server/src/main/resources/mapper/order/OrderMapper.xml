@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.order.mapper.OrderMapper">
+
+    <resultMap type="Order" id="OrderResult">
+        <id     property="id"           column="id"            />
+        <result property="tenantId"     column="tenant_id"     />
+        <result property="orderNo"      column="order_no"      />
+        <result property="customerId"   column="customer_id"   />
+        <result property="customerName" column="customer_name" />
+        <result property="totalAmount"  column="total_amount"  />
+        <result property="discount"     column="discount"      />
+        <result property="finalAmount"  column="final_amount"  />
+        <result property="taxAmount"    column="tax_amount"    />
+        <result property="afterTaxAmount" column="after_tax_amount" />
+        <result property="paidAmount"   column="paid_amount"   />
+        <result property="status"       column="status"        />
+        <result property="remark"       column="remark"        />
+        <result property="createBy"     column="create_by"     />
+        <result property="createByName" column="create_by_name" />
+        <result property="createTime"   column="create_time"   />
+        <result property="updateBy"     column="update_by"     />
+        <result property="updateByName" column="update_by_name" />
+        <result property="updateTime"   column="update_time"   />
+        <result property="attachments"  column="attachments"   />
+        <result property="companyId"  column="company_id"   />
+    </resultMap>
+
+    <sql id="selectOrderVo">
+        select
+            o.id,
+            o.tenant_id,
+            o.order_no,
+            od.id as order_detail_id,
+            ci.customer_name,
+            cc.company_name,
+            cc.tax_number,
+            od.product_name as product_names,
+            o.status,
+            IFNULL(o.create_by_name, IFNULL(ci.owner_user_name, ci.create_by_name)) as sales_person,
+            cc.company_type,
+            o.total_amount,
+            o.paid_amount,
+            od.effective_date as effective_date,
+            od.end_date as end_date,
+            o.create_by,
+            o.create_by_name,
+            o.create_time,
+            o.update_by,
+            o.update_by_name,
+            o.update_time,
+            o.attachments,
+            o.company_id,
+            o.customer_id
+        from orders o
+        left join order_details od on o.id = od.order_id
+        left join customer_info ci on o.customer_id = ci.id
+        left join customer_company cc on o.company_id = cc.id
+    </sql>
+
+    <select id="selectOrderList"  resultType="com.qykj.finmaster.order.domain.resp.GetOrderListResp">
+        select
+        o.id,
+        o.tenant_id,
+        o.order_no,
+        ci.customer_name,
+        o.status,
+        IFNULL(o.create_by_name, IFNULL(ci.owner_user_name, ci.create_by_name)) as sales_person,
+        o.total_amount,
+        o.paid_amount,
+        o.create_by,
+        o.create_by_name,
+        o.create_time,
+        o.update_by,
+        o.update_by_name,
+        o.update_time,
+        o.attachments,
+        o.company_id,
+        o.customer_id,
+        o.payment_type,
+        o.pay_time,
+        o.lead_month,
+        o.remark
+        from orders o
+        left join customer_info ci on o.customer_id = ci.id
+        where not exists (select 1 from payment_record pr where pr.order_no = o.order_no and pr.payment_status =
+        'cancel')
+        <if test=" params.orderType != ''">
+            AND o.order_type in
+            <foreach item="item" collection="params.orderType" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+        </if>
+        <if test="params.orderNo != null and params.orderNo != ''">
+            AND o.order_no like concat('%', #{params.orderNo}, '%')
+        </if>
+        <if test="params.customerId != null">
+            AND o.customer_id = #{params.customerId}
+        </if>
+        <if test="params.companyId != null">
+            AND EXISTS (SELECT 1 FROM order_details od
+                        WHERE od.order_id = o.id AND od.company_id = #{params.companyId})
+        </if>
+        <if test="params.customerName != null and params.customerName != ''">
+            AND ci.customer_name like concat('%', #{params.customerName}, '%')
+        </if>
+        <if test="params.ownerUserName != null and params.ownerUserName != ''">
+            AND ci.owner_user_name like concat('%', #{params.ownerUserName}, '%')
+        </if>
+        <if test="params.status != null and params.status != ''">
+            AND o.status = #{params.status}
+        </if>
+        <if test="params.startTime != null">
+            AND o.pay_time >= #{params.startTime}
+        </if>
+        <if test="params.endTime != null">
+            AND o.pay_time &lt;= #{params.endTime}
+        </if>
+        <if test="params.leadMonth != null and params.leadMonth != ''">
+            AND o.lead_month like concat('%', #{params.leadMonth}, '%')
+        </if>
+        <if test="params.paymentType != null and params.paymentType != ''">
+            AND o.payment_type = #{params.paymentType}
+        </if>
+        <if test="params.orderDetailType != null and params.orderDetailType != ''">
+            AND EXISTS (SELECT 1 FROM order_details od2 WHERE od2.order_id = o.id AND od2.order_detail_type = #{params.orderDetailType})
+        </if>
+        <if test="params.dataScopeUserIds != null">
+            and (ci.create_by in
+            <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            or ci.owner_user in
+            <foreach item="item" collection="params.dataScopeUserIds" open="(" separator="," close=")">
+                #{item}
+            </foreach>
+            )
+        </if>
+        <if test="params.tenantId != null">
+            and o.tenant_id = #{params.tenantId}
+        </if>
+        order by o.create_time desc
+    </select>
+
+    <select id="selectOrderById" parameterType="Long" resultMap="OrderResult">
+        <include refid="selectOrderVo"/>
+        where o.id = #{id}
+    </select>
+    <select id="selectOrder" parameterType="Map" resultMap="OrderResult">
+        <include refid="selectOrderVo"/>
+        <where>
+            o.id = #{id}
+            <if test = "tenantId != null">
+                and o.tenant_id = #{tenantId}
+            </if>
+        </where>
+    </select>
+    <insert id="insertOrder" parameterType="Order" useGeneratedKeys="true" keyProperty="id">
+        insert into orders
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="tenantId != null">tenant_id,</if>
+            <if test="orderNo != null">order_no,</if>
+            <if test="customerId != null">customer_id,</if>
+            <if test="customerName != null">customer_name,</if>
+            <if test="totalAmount != null">total_amount,</if>
+            <if test="discount != null">discount,</if>
+            <if test="finalAmount != null">final_amount,</if>
+            <if test="taxAmount != null">tax_amount,</if>
+            <if test="afterTaxAmount != null">after_tax_amount,</if>
+            <if test="paidAmount != null">paid_amount,</if>
+            <if test="status != null">status,</if>
+            <if test="remark != null">remark,</if>
+            <if test="createBy != null">create_by,</if>
+            <if test="createByName != null">create_by_name,</if>
+            <if test="createTime != null">create_time,</if>
+            <if test="updateBy != null">update_by,</if>
+            <if test="updateByName != null">update_by_name,</if>
+            <if test="updateTime != null">update_time,</if>
+            <if test="attachments != null">attachments,</if>
+            <if test="companyId != null">company_id,</if>
+         </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="tenantId != null">#{tenantId},</if>
+            <if test="orderNo != null">#{orderNo},</if>
+            <if test="customerId != null">#{customerId},</if>
+            <if test="customerName != null">#{customerName},</if>
+            <if test="totalAmount != null">#{totalAmount},</if>
+            <if test="discount != null">#{discount},</if>
+            <if test="finalAmount != null">#{finalAmount},</if>
+            <if test="taxAmount != null">#{taxAmount},</if>
+            <if test="afterTaxAmount != null">#{afterTaxAmount},</if>
+            <if test="paidAmount != null">#{paidAmount},</if>
+            <if test="status != null">#{status},</if>
+            <if test="remark != null">#{remark},</if>
+            <if test="createBy != null">#{createBy},</if>
+            <if test="createByName != null">#{createByName},</if>
+            <if test="createTime != null">#{createTime},</if>
+            <if test="updateBy != null">#{updateBy},</if>
+            <if test="updateByName != null">#{updateByName},</if>
+            <if test="updateTime != null">#{updateTime},</if>
+            <if test="attachments != null">#{attachments},</if>
+            <if test="companyId != null">#{companyId},</if>
+         </trim>
+    </insert>
+
+    <update id="updateOrder" parameterType="Order">
+        update orders
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="orderNo != null">order_no = #{orderNo},</if>
+            <if test="customerId != null">customer_id = #{customerId},</if>
+            <if test="customerName != null">customer_name = #{customerName},</if>
+            <if test="totalAmount != null">total_amount = #{totalAmount},</if>
+            <if test="discount != null">discount = #{discount},</if>
+            <if test="finalAmount != null">final_amount = #{finalAmount},</if>
+            <if test="taxAmount != null">tax_amount = #{taxAmount},</if>
+            <if test="afterTaxAmount != null">after_tax_amount = #{afterTaxAmount},</if>
+            <if test="paidAmount != null">paid_amount = #{paidAmount},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="remark != null">remark = #{remark},</if>
+            <if test="updateBy != null">update_by = #{updateBy},</if>
+            <if test="updateByName != null">update_by_name = #{updateByName},</if>
+            <if test="updateTime != null">update_time = #{updateTime},</if>
+            <if test="companyId !=null">company_id = #{companyId}</if>
+            <if test="attachments != null">attachments = #{attachments},</if>
+        </trim>
+        <where>
+            id = #{id}
+            <if test="tenantId != null">
+                and tenant_id = #{tenantId}
+            </if>
+        </where>
+    </update>
+
+    <delete id="deleteOrderById" parameterType="Long">
+        delete from orders where id = #{id}
+    </delete>
+
+    <delete id="deleteOrderByIds" parameterType="String">
+        delete from orders where id in
+        <foreach item="id" collection="array" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+    <update id="updateOrderStatus">
+        update orders
+        set status = #{status},
+            update_time = now()
+        where id = #{id}
+    </update>
+
+    <!-- 更新订单明细的合同日期 -->
+    <update id="updateOrderDetail" parameterType="OrderDetail">
+        update order_details
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="effectiveDate != null">effective_date = #{effectiveDate},</if>
+            <if test="endDate != null">end_date = #{endDate},</if>
+            <if test="updateBy != null">update_by = #{updateBy},</if>
+            <if test="updateByName != null">update_by_name = #{updateByName},</if>
+            <if test="updateTime != null">update_time = #{updateTime},</if>
+        </trim>
+        where id = #{id}
+    </update>
+</mapper>

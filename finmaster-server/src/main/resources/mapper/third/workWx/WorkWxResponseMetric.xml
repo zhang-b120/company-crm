@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.third.workWx.mapper.WorkWxResponseMetricMapper">
+
+    <!-- 按群统计 -->
+    <select id="statsByGroup" resultType="java.util.Map">
+        SELECT
+            room_id        AS room_id,
+            MAX(chat_name) AS chat_name,
+            MAX(first_customer_time) AS last_time,
+            COUNT(*)       AS rounds,
+            SUM(CASE WHEN replied = 1 THEN 1 ELSE 0 END)                                   AS replied_count,
+            ROUND(AVG(CASE WHEN replied = 1 THEN response_seconds END), 0)                 AS avg_resp_seconds,
+            SUM(CASE WHEN response_status IN ('timeout','serious_timeout') THEN 1 ELSE 0 END) AS timeout_count,
+            SUM(CASE WHEN replied = 0 THEN 1 ELSE 0 END)                                   AS unreplied_count
+        FROM work_wx_response_metric
+        WHERE deleted = 0 AND tenant_id = #{tenantId}
+          AND first_customer_time &gt;= #{since}
+        GROUP BY room_id
+        ORDER BY unreplied_count DESC, timeout_count DESC
+    </select>
+
+    <!-- 按员工统计（已回复回合，按首响员工聚合） -->
+    <select id="statsByMember" resultType="java.util.Map">
+        SELECT
+            first_reply_user        AS username,
+            MAX(first_reply_name)   AS real_name,
+            COUNT(*)                AS reply_count,
+            ROUND(AVG(response_seconds), 0) AS avg_resp_seconds,
+            SUM(CASE WHEN response_status IN ('timeout','serious_timeout') THEN 1 ELSE 0 END) AS timeout_count
+        FROM work_wx_response_metric
+        WHERE deleted = 0 AND tenant_id = #{tenantId}
+          AND replied = 1 AND first_reply_user IS NOT NULL
+          AND first_reply_time &gt;= #{since}
+        GROUP BY first_reply_user
+        ORDER BY reply_count DESC
+    </select>
+
+    <!-- 会话回合明细 WHERE（工单 82 / WXRESP-03）：主表 metric m ⨝ 客户消息 c ⨝ 员工回复 r -->
+    <sql id="turnsWhere">
+        WHERE m.deleted = 0 AND m.tenant_id = #{tenantId}
+        <if test="startTime != null">AND m.first_customer_time &gt;= #{startTime}</if>
+        <if test="endTime != null">AND m.first_customer_time &lt; #{endTime}</if>
+        <if test="roomId != null and roomId != ''">AND m.room_id = #{roomId}</if>
+        <if test="memberUser != null and memberUser != ''">AND m.first_reply_user = #{memberUser}</if>
+        <if test="customerUser != null and customerUser != ''">AND m.first_customer_user = #{customerUser}</if>
+        <if test="statuses != null and statuses.size() > 0">
+            AND m.response_status IN
+            <foreach collection="statuses" item="s" open="(" separator="," close=")">#{s}</foreach>
+        </if>
+        <if test="keyword != null and keyword != ''">
+            AND c.content LIKE CONCAT('%', #{keyword}, '%')
+        </if>
+    </sql>
+
+    <!-- 工单82/WXRESP-11：按群聚合——每群只取最近一条回合（ROW_NUMBER PARTITION BY room_id 取 rn=1） -->
+    <select id="turnsList" resultType="java.util.Map">
+        SELECT * FROM (
+            SELECT
+                m.id                    AS id,
+                m.room_id               AS room_id,
+                m.chat_name             AS chat_name,
+                m.first_customer_msg_id AS first_customer_msg_id,
+                m.first_customer_user   AS first_customer_user,
+                m.first_customer_time   AS first_customer_time,
+                m.first_reply_msg_id    AS first_reply_msg_id,
+                m.first_reply_user      AS first_reply_user,
+                m.first_reply_name      AS first_reply_name,
+                m.first_reply_time      AS first_reply_time,
+                m.response_seconds      AS response_seconds,
+                m.working_seconds       AS working_seconds,
+                m.response_status       AS response_status,
+                m.replied               AS replied,
+                c.from_name             AS customer_name,
+                c.content               AS customer_content,
+                c.msg_type              AS customer_msg_type,
+                r.content               AS reply_content,
+                r.msg_type              AS reply_msg_type,
+                ROW_NUMBER() OVER (PARTITION BY m.room_id ORDER BY m.first_customer_time DESC, m.id DESC) AS rn
+            FROM work_wx_response_metric m
+            LEFT JOIN work_wx_message c ON c.msg_id = m.first_customer_msg_id AND c.deleted = 0
+            LEFT JOIN work_wx_message r ON r.msg_id = m.first_reply_msg_id AND r.deleted = 0
+            <include refid="turnsWhere"/>
+        ) t
+        WHERE t.rn = 1
+        <choose>
+            <when test="orderBy == 'respSeconds'">ORDER BY t.response_seconds DESC</when>
+            <when test="orderBy == 'waited'">ORDER BY (t.replied = 0) DESC, t.first_customer_time ASC</when>
+            <otherwise>ORDER BY t.first_customer_time DESC</otherwise>
+        </choose>
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <!-- 按群聚合后的总数 = 去重群数（同 WHERE） -->
+    <select id="turnsCount" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT m.room_id)
+        FROM work_wx_response_metric m
+        LEFT JOIN work_wx_message c ON c.msg_id = m.first_customer_msg_id AND c.deleted = 0
+        <include refid="turnsWhere"/>
+    </select>
+
+</mapper>

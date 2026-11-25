@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.customer.customerInfoLog.mapper.CustomerLogMapper">
+
+    <resultMap type="com.qykj.finmaster.customer.customerInfoLog.domain.CustomerLog" id="CustomerLogResult">
+        <id     property="id"           column="id"            />
+        <result property="tenantId"     column="tenant_id"     />
+        <result property="customerId"   column="customer_id"   />
+        <result property="customerType" column="customer_type" />
+        <result property="logType"      column="log_type"      />
+        <result property="content"      column="content"       />
+        <result property="followType"   column="follow_type"   />
+        <result property="nextFollowTime" column="next_follow_time" />
+        <result property="createBy"     column="create_by"     />
+        <result property="createTime"   column="create_time"   />
+        <result property="updateBy"     column="update_by"     />
+        <result property="updateTime"   column="update_time"   />
+    </resultMap>
+
+    <sql id="selectCustomerLogVo">
+        select id, tenant_id, customer_id, log_type, content, follow_type, next_follow_time,
+        create_by, create_time, update_by, update_time
+        from customer_log
+    </sql>
+
+    <select id="selectCustomerLogList"  resultType="com.qykj.finmaster.customer.customerInfoLog.domain.resp.GetCustomerLogPageResp">
+        <include refid="selectCustomerLogVo"/>
+        <where>
+            <if test="params.tenantId != null">
+                AND tenant_id = #{params.tenantId}
+            </if>
+            <if test="params.customerId != null">
+                AND customer_id = #{params.customerId}
+            </if>
+            <if test="params.customerType != null">
+                AND customer_type = #{params.customerType}
+            </if>
+            <if test="params.logType != null">
+                AND log_type = #{params.logType}
+            </if>
+            <if test="params.content != null and params.content != ''">
+                AND content like concat('%', #{params.content}, '%')
+            </if>
+            <if test="params.followType != null and params.followType != ''">
+                AND follow_type = #{params.followType}
+            </if>
+            <!-- 数据权限过滤：create_by 存储的是操作人 userId（非 username），
+                 用 LoginUser.dataScopeUserList (List<Long>) 匹配。
+                 dataScopeUserIdList == null 代表「全部数据权限」或超管，不加此过滤 -->
+            <if test="params.dataScopeUserIdList != null">
+                AND create_by IN
+                <foreach item="item" collection="params.dataScopeUserIdList" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+            </if>
+        </where>
+        order by create_time desc
+    </select>
+
+    <select id="selectCustomerLogById" parameterType="Long" resultMap="CustomerLogResult">
+        <include refid="selectCustomerLogVo"/>
+        <where>
+                id = #{id}
+            <if test="tenantId != null">
+                AND tenant_id = #{tenantId}
+            </if>
+        </where>
+    </select>
+
+    <insert id="insertCustomerLog" parameterType="com.qykj.finmaster.customer.customerInfoLog.domain.CustomerLog" useGeneratedKeys="true" keyProperty="id">
+        insert into customer_log
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="tenantId != null">tenant_id,</if>
+            <if test="customerId != null">customer_id,</if>
+            <!-- 临时注释掉customer_type，直到数据库表结构更新 -->
+            <!-- <if test="customerType != null">customer_type,</if> -->
+            <if test="logType != null">log_type,</if>
+            <if test="content != null">content,</if>
+            <if test="followType != null">follow_type,</if>
+            <if test="nextFollowTime != null">next_follow_time,</if>
+            <if test="createBy != null">create_by,</if>
+            <if test="createTime != null">create_time,</if>
+            <if test="updateBy != null">update_by,</if>
+            <if test="updateTime != null">update_time,</if>
+         </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="tenantId != null">#{tenantId},</if>
+            <if test="customerId != null">#{customerId},</if>
+            <!-- 临时注释掉customerType，直到数据库表结构更新 -->
+            <!-- <if test="customerType != null">#{customerType},</if> -->
+            <if test="logType != null">#{logType},</if>
+            <if test="content != null">#{content},</if>
+            <if test="followType != null">#{followType},</if>
+            <if test="nextFollowTime != null">#{nextFollowTime},</if>
+            <if test="createBy != null">#{createBy},</if>
+            <if test="createTime != null">#{createTime},</if>
+            <if test="updateBy != null">#{updateBy},</if>
+            <if test="updateTime != null">#{updateTime},</if>
+         </trim>
+    </insert>
+
+    <update id="updateCustomerLog" parameterType="com.qykj.finmaster.customer.customerInfoLog.domain.CustomerLog">
+        update customer_log
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="customerId != null">customer_id = #{customerId},</if>
+            <if test="customerType != null">customer_type = #{customerType},</if>
+            <if test="logType != null">log_type = #{logType},</if>
+            <if test="content != null">content = #{content},</if>
+            <if test="followType != null">follow_type = #{followType},</if>
+            <if test="nextFollowTime != null">next_follow_time = #{nextFollowTime},</if>
+            <if test="updateBy != null">update_by = #{updateBy},</if>
+            <if test="updateTime != null">update_time = #{updateTime},</if>
+        </trim>
+        <where>
+            id = #{id}
+            <if test="tenantId != null">
+                and tenant_id = #{tenantId}
+            </if>
+        </where>
+    </update>
+
+    <delete id="deleteCustomerLogById" parameterType="Long">
+        delete from customer_log where id = #{id}
+    </delete>
+
+    <delete id="deleteCustomerLogByIds" parameterType="String">
+        delete from customer_log where id in
+        <foreach item="id" collection="ids" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+</mapper>

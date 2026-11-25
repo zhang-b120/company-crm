@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.data.mapper.PaymentDataMapper">
+    <select id="list" resultType="com.qykj.finmaster.data.domain.resp.GetPaymentDataResp">
+        SELECT
+            o.payment_type AS paymentType,
+            SUM(CASE WHEN o.order_type = 'NORMAL' THEN od.unit_price * od.quantity
+            WHEN o.order_type = 'REFUND' THEN -(od.unit_price * od.quantity)
+            ELSE od.unit_price * od.quantity END) AS paymentAmount
+        FROM order_details od
+        LEFT JOIN orders o ON od.order_id = o.id
+        WHERE 1=1
+        <if test="params.start != null">
+            AND o.pay_time >= #{params.start}
+        </if>
+        <if test="params.end != null">
+            AND o.pay_time &lt;= #{params.end}
+        </if>
+        <if test="params.leadMonth != null and params.leadMonth != ''">
+            AND o.lead_month like concat('%', #{params.leadMonth}, '%')
+        </if>
+        <if test="params.salesPerson != null and params.salesPerson != ''">
+            AND EXISTS (
+                SELECT 1 FROM customer_info ci
+                WHERE ci.id = o.customer_id
+                AND COALESCE(NULLIF(ci.owner_user_name, ''), ci.create_by_name) like concat('%', #{params.salesPerson}, '%')
+            )
+        </if>
+        <if test="params.amount != null and params.amount != ''">
+            and od.unit_price * od.quantity = #{params.amount}
+        </if>
+        <if test="params.orderDetailType != null and params.orderDetailType != ''">
+            AND od.order_detail_type = #{params.orderDetailType}
+        </if>
+        <if test="params.deptId != null">
+            AND EXISTS (
+                SELECT 1 FROM sys_user su
+                JOIN sys_user_department sud ON su.id = sud.user_id AND sud.deleted = 0
+                JOIN customer_info ci2 ON COALESCE(NULLIF(ci2.owner_user, ''), ci2.create_by) = su.username
+                WHERE ci2.id = o.customer_id AND sud.department_id = #{params.deptId}
+            )
+        </if>
+        <if test="params.excludeDeptIds != null and params.excludeDeptIds.size() > 0">
+            AND NOT EXISTS (
+                SELECT 1 FROM sys_user su
+                JOIN sys_user_department sud ON su.id = sud.user_id AND sud.deleted = 0
+                JOIN customer_info ci2 ON COALESCE(NULLIF(ci2.owner_user, ''), ci2.create_by) = su.username
+                WHERE ci2.id = o.customer_id AND sud.department_id IN
+                <foreach item="item" collection="params.excludeDeptIds" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+            )
+        </if>
+        <!-- 业务名称包含关键字（工商业务页签）：明细产品需关联到业务名称包含该关键字的业务 -->
+        <if test="params.businessNameContains != null and params.businessNameContains != ''">
+            AND EXISTS (
+                SELECT 1 FROM sys_business_product sbp
+                JOIN sys_business sb ON sb.id = sbp.business_id AND sb.deleted = 0
+                WHERE sbp.product_id = od.product_id
+                  AND sbp.deleted = 0
+                  AND sb.business_name LIKE CONCAT('%', #{params.businessNameContains}, '%')
+            )
+        </if>
+        <!-- 业务名称排除关键字（其它页签）：明细产品不能关联到业务名称包含该关键字的业务 -->
+        <if test="params.excludeBusinessNameContains != null and params.excludeBusinessNameContains != ''">
+            AND NOT EXISTS (
+                SELECT 1 FROM sys_business_product sbp
+                JOIN sys_business sb ON sb.id = sbp.business_id AND sb.deleted = 0
+                WHERE sbp.product_id = od.product_id
+                  AND sbp.deleted = 0
+                  AND sb.business_name LIKE CONCAT('%', #{params.excludeBusinessNameContains}, '%')
+            )
+        </if>
+        GROUP BY o.payment_type
+        ORDER BY o.payment_type DESC
+    </select>
+    <select id="paymentDataDetailPage"
+            resultType="com.qykj.finmaster.data.domain.resp.GetPaymentDataDetailPageResp">
+        SELECT
+            ci.id AS customerId,
+            ci.customer_name AS customerName,
+            CASE WHEN o.order_type = 'NORMAL' THEN od.unit_price * od.quantity
+            WHEN o.order_type = 'REFUND' THEN -(od.unit_price * od.quantity)
+            ELSE od.unit_price * od.quantity END AS amount,
+            od.product_id AS productId,
+            od.product_name AS productName,
+            o.pay_time AS payTime,
+            o.payment_type AS paymentType,
+            o.lead_month AS leadMonth,
+            IFNULL(ci.owner_user_name, ci.create_by_name) as salesPerson,
+            od.order_detail_type AS orderDetailType
+        FROM order_details od
+        LEFT JOIN orders o ON od.order_id = o.id
+        LEFT JOIN customer_info ci ON o.customer_id = ci.id
+        WHERE 1=1
+        <if test="params.start != null">
+            AND o.pay_time >= #{params.start}
+        </if>
+        <if test="params.end != null">
+            AND o.pay_time &lt;= #{params.end}
+        </if>
+        <if test="params.paymentType != null and params.paymentType != ''">
+            AND o.payment_type = #{params.paymentType}
+        </if>
+        <if test="params.leadMonth != null and params.leadMonth != ''">
+            AND o.lead_month like concat('%', #{params.leadMonth}, '%')
+        </if>
+        <if test="params.salesPerson != null and params.salesPerson != ''">
+            AND COALESCE(NULLIF(ci.owner_user_name, ''), ci.create_by_name) like concat('%', #{params.salesPerson}, '%')
+        </if>
+        <if test="params.amount != null and params.amount != ''">
+            and od.unit_price * od.quantity = #{params.amount}
+        </if>
+        <if test="params.orderDetailType != null and params.orderDetailType != ''">
+            AND od.order_detail_type = #{params.orderDetailType}
+        </if>
+        <if test="params.deptId != null">
+            AND EXISTS (
+                SELECT 1 FROM sys_user su
+                JOIN sys_user_department sud ON su.id = sud.user_id AND sud.deleted = 0
+                WHERE COALESCE(NULLIF(ci.owner_user, ''), ci.create_by) = su.username
+                AND sud.department_id = #{params.deptId}
+            )
+        </if>
+        <if test="params.excludeDeptIds != null and params.excludeDeptIds.size() > 0">
+            AND NOT EXISTS (
+                SELECT 1 FROM sys_user su
+                JOIN sys_user_department sud ON su.id = sud.user_id AND sud.deleted = 0
+                WHERE COALESCE(NULLIF(ci.owner_user, ''), ci.create_by) = su.username
+                AND sud.department_id IN
+                <foreach item="item" collection="params.excludeDeptIds" open="(" separator="," close=")">
+                    #{item}
+                </foreach>
+            )
+        </if>
+        <!-- 业务名称包含关键字（工商业务页签） -->
+        <if test="params.businessNameContains != null and params.businessNameContains != ''">
+            AND EXISTS (
+                SELECT 1 FROM sys_business_product sbp
+                JOIN sys_business sb ON sb.id = sbp.business_id AND sb.deleted = 0
+                WHERE sbp.product_id = od.product_id
+                  AND sbp.deleted = 0
+                  AND sb.business_name LIKE CONCAT('%', #{params.businessNameContains}, '%')
+            )
+        </if>
+        <!-- 业务名称排除关键字（其它页签） -->
+        <if test="params.excludeBusinessNameContains != null and params.excludeBusinessNameContains != ''">
+            AND NOT EXISTS (
+                SELECT 1 FROM sys_business_product sbp
+                JOIN sys_business sb ON sb.id = sbp.business_id AND sb.deleted = 0
+                WHERE sbp.product_id = od.product_id
+                  AND sbp.deleted = 0
+                  AND sb.business_name LIKE CONCAT('%', #{params.excludeBusinessNameContains}, '%')
+            )
+        </if>
+        ORDER BY o.pay_time DESC
+    </select>
+
+    <!-- 按日统计订单成交和退款数据 -->
+    <select id="getOrderOverviewDaily" resultType="com.qykj.finmaster.data.domain.resp.OrderOverviewItemResp">
+        SELECT
+            DATE_FORMAT(o.pay_time, '%Y-%m-%d') AS label,
+            SUM(CASE WHEN o.order_type = 'NORMAL' THEN 1 ELSE 0 END) AS orderCount,
+            SUM(CASE WHEN o.order_type = 'NORMAL' THEN od.unit_price * od.quantity ELSE 0 END) AS orderAmount,
+            SUM(CASE WHEN o.order_type = 'REFUND' THEN 1 ELSE 0 END) AS refundCount,
+            SUM(CASE WHEN o.order_type = 'REFUND' THEN od.unit_price * od.quantity ELSE 0 END) AS refundAmount
+        FROM order_details od
+        LEFT JOIN orders o ON od.order_id = o.id
+        WHERE o.status = 'PAID'
+          AND o.pay_time >= #{params.start}
+          AND o.pay_time &lt;= #{params.end}
+        GROUP BY DATE_FORMAT(o.pay_time, '%Y-%m-%d')
+        ORDER BY label ASC
+    </select>
+
+    <!-- 按月统计订单成交和退款数据 -->
+    <select id="getOrderOverviewMonthly" resultType="com.qykj.finmaster.data.domain.resp.OrderOverviewItemResp">
+        SELECT
+            DATE_FORMAT(o.pay_time, '%Y-%m') AS label,
+            SUM(CASE WHEN o.order_type = 'NORMAL' THEN 1 ELSE 0 END) AS orderCount,
+            SUM(CASE WHEN o.order_type = 'NORMAL' THEN od.unit_price * od.quantity ELSE 0 END) AS orderAmount,
+            SUM(CASE WHEN o.order_type = 'REFUND' THEN 1 ELSE 0 END) AS refundCount,
+            SUM(CASE WHEN o.order_type = 'REFUND' THEN od.unit_price * od.quantity ELSE 0 END) AS refundAmount
+        FROM order_details od
+        LEFT JOIN orders o ON od.order_id = o.id
+        WHERE o.status = 'PAID'
+          AND o.pay_time >= #{params.start}
+          AND o.pay_time &lt;= #{params.end}
+        GROUP BY DATE_FORMAT(o.pay_time, '%Y-%m')
+        ORDER BY label ASC
+    </select>
+</mapper>

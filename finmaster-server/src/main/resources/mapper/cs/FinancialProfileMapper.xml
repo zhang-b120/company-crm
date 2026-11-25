@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.cs.profile.mapper.FinancialProfileMapper">
+
+    <!-- 按税号批量查询账套信息 -->
+    <select id="getAccountSetsByTaxNumbers" resultType="com.qykj.finmaster.cs.profile.domain.FinancialAccountSetInfo">
+        SELECT id, credit_code, vat_type, individual_tax_code
+        FROM financial.fxy_financial_account_sets
+        WHERE credit_code IN
+        <foreach item="t" collection="taxNumbers" open="(" separator="," close=")">#{t}</foreach>
+    </select>
+
+    <!-- 按账套ID批量查询办税员 -->
+    <select id="getTaxOfficersByAccountSetIds" resultType="com.qykj.finmaster.cs.profile.domain.FinancialTaxOfficer">
+        SELECT id, account_set_id, name, phone, password, login_type, id_card, is_default, remark,
+               created_at, updated_at
+        FROM financial.tax_officer
+        WHERE account_set_id IN
+        <foreach item="id" collection="accountSetIds" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY account_set_id, is_default DESC, id ASC
+    </select>
+
+    <!-- 按单个账套ID查询办税员列表 -->
+    <select id="getTaxOfficersByAccountSetId" resultType="com.qykj.finmaster.cs.profile.domain.FinancialTaxOfficer">
+        SELECT id, account_set_id, name, phone, password, login_type, id_card, is_default, remark,
+               created_at, updated_at
+        FROM financial.tax_officer
+        WHERE account_set_id = #{accountSetId}
+        ORDER BY is_default DESC, id ASC
+    </select>
+
+    <!-- 按账套ID批量获取最新个税验证记录 -->
+    <select id="getLatestIndividualTaxByAccountSetIds" resultType="com.qykj.finmaster.cs.profile.domain.FinancialIndividualTaxInfo">
+        SELECT t.account_sets_id, t.result, t.failed_reason
+        FROM financial.individual_tax t
+        INNER JOIN (
+            SELECT account_sets_id, MAX(id) AS max_id
+            FROM financial.individual_tax
+            WHERE account_sets_id IN
+            <foreach item="id" collection="accountSetIds" open="(" separator="," close=")">#{id}</foreach>
+            GROUP BY account_sets_id
+        ) latest ON t.id = latest.max_id
+    </select>
+
+    <!-- 按税号获取账套ID -->
+    <select id="getAccountSetIdByTaxNumber" resultType="java.lang.Long">
+        SELECT id FROM financial.fxy_financial_account_sets
+        WHERE credit_code = #{taxNumber}
+        LIMIT 1
+    </select>
+
+</mapper>

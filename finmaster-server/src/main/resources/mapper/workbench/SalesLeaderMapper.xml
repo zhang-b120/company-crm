@@ -1,0 +1,794 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qykj.finmaster.workbench.mapper.SalesLeaderMapper">
+
+    <!-- A1 今日待跟进总数（lead+customer 合并） -->
+    <select id="countTodayPendingTotal" resultType="java.lang.Long">
+        SELECT
+        (SELECT COUNT(*) FROM sale_lead WHERE deleted=0 AND tenant_id=#{tenantId}
+            AND status IN (1,2) AND next_follow_time IS NOT NULL
+            AND next_follow_time &gt;= #{dayStart} AND next_follow_time &lt; #{dayEnd}
+            AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+        +
+        (SELECT COUNT(*) FROM customer_info WHERE tenant_id=#{tenantId}
+            AND customer_type=1 AND next_follow_time IS NOT NULL
+            AND next_follow_time &gt;= #{dayStart} AND next_follow_time &lt; #{dayEnd}
+            AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+    </select>
+
+    <!-- A1 按成员（lead + customer 合并 group by） -->
+    <select id="todayPendingByMember" resultType="java.util.Map">
+        SELECT t.username AS username, MAX(u.real_name) AS real_name, SUM(t.cnt) AS count
+        FROM (
+            SELECT owner_user AS username, COUNT(*) AS cnt FROM sale_lead
+            WHERE deleted=0 AND tenant_id=#{tenantId} AND status IN (1,2)
+              AND next_follow_time &gt;= #{dayStart} AND next_follow_time &lt; #{dayEnd}
+              AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            GROUP BY owner_user
+            UNION ALL
+            SELECT owner_user AS username, COUNT(*) AS cnt FROM customer_info
+            WHERE tenant_id=#{tenantId} AND customer_type=1
+              AND next_follow_time &gt;= #{dayStart} AND next_follow_time &lt; #{dayEnd}
+              AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            GROUP BY owner_user
+        ) t
+        LEFT JOIN sys_user u ON u.username=t.username AND u.tenant_id=#{tenantId} AND u.deleted=0
+        GROUP BY t.username
+        ORDER BY count DESC
+    </select>
+
+    <!-- A2 即将回收（lead+customer 合并）：用范围比较 + OR 拆分 COALESCE
+         线索部分与 LeadAutoInvalidateTask 对齐：复用 leadRecycleHardFiltersDirect 应用 ③④⑤⑥⑧⑨ 硬过滤 -->
+    <select id="countAboutRecycle" resultType="java.lang.Long">
+        SELECT
+        (SELECT COUNT(*) FROM sale_lead l WHERE l.deleted=0 AND l.tenant_id=#{tenantId} AND l.status IN (1,2)
+            AND (
+              (l.last_follow_time IS NOT NULL
+               AND l.last_follow_time &gt;= NOW() - INTERVAL #{leadTo} DAY
+               AND l.last_follow_time &lt;  NOW() - INTERVAL (#{leadFrom} - 1) DAY)
+              OR
+              (l.last_follow_time IS NULL
+               AND l.create_time &gt;= NOW() - INTERVAL #{leadTo} DAY
+               AND l.create_time &lt;  NOW() - INTERVAL (#{leadFrom} - 1) DAY)
+            )
+            AND l.owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            <include refid="com.qykj.finmaster.customer.lead.mapper.LeadMapper.leadRecycleHardFiltersDirect"/>
+        )
+        +
+        (SELECT COUNT(*) FROM customer_info WHERE tenant_id=#{tenantId} AND customer_type=1
+            AND (status IS NULL OR status NOT IN (3, 4))
+            AND (
+              (last_follow_time IS NOT NULL
+               AND last_follow_time &gt;= NOW() - INTERVAL #{custTo} DAY
+               AND last_follow_time &lt;  NOW() - INTERVAL (#{custFrom} - 1) DAY)
+              OR
+              (last_follow_time IS NULL
+               AND create_time &gt;= NOW() - INTERVAL #{custTo} DAY
+               AND create_time &lt;  NOW() - INTERVAL (#{custFrom} - 1) DAY)
+            )
+            AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>)
+    </select>
+
+    <select id="aboutRecycleByMember" resultType="java.util.Map">
+        SELECT t.username AS username, MAX(u.real_name) AS real_name, SUM(t.cnt) AS count
+        FROM (
+            SELECT l.owner_user AS username, COUNT(*) AS cnt FROM sale_lead l
+            WHERE l.deleted=0 AND l.tenant_id=#{tenantId} AND l.status IN (1,2)
+              AND (
+                (l.last_follow_time IS NOT NULL
+                 AND l.last_follow_time &gt;= NOW() - INTERVAL #{leadTo} DAY
+                 AND l.last_follow_time &lt;  NOW() - INTERVAL (#{leadFrom} - 1) DAY)
+                OR
+                (l.last_follow_time IS NULL
+                 AND l.create_time &gt;= NOW() - INTERVAL #{leadTo} DAY
+                 AND l.create_time &lt;  NOW() - INTERVAL (#{leadFrom} - 1) DAY)
+              )
+              AND l.owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+              <!-- 与 LeadAutoInvalidateTask 对齐的硬过滤 ③④⑤⑥⑧⑨ -->
+              <include refid="com.qykj.finmaster.customer.lead.mapper.LeadMapper.leadRecycleHardFiltersDirect"/>
+            GROUP BY l.owner_user
+            UNION ALL
+            SELECT owner_user AS username, COUNT(*) AS cnt FROM customer_info
+            WHERE tenant_id=#{tenantId} AND customer_type=1
+              AND (status IS NULL OR status NOT IN (3, 4))
+              AND (
+                (last_follow_time IS NOT NULL
+                 AND last_follow_time &gt;= NOW() - INTERVAL #{custTo} DAY
+                 AND last_follow_time &lt;  NOW() - INTERVAL (#{custFrom} - 1) DAY)
+                OR
+                (last_follow_time IS NULL
+                 AND create_time &gt;= NOW() - INTERVAL #{custTo} DAY
+                 AND create_time &lt;  NOW() - INTERVAL (#{custFrom} - 1) DAY)
+              )
+              AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            GROUP BY owner_user
+        ) t
+        LEFT JOIN sys_user u ON u.username=t.username AND u.tenant_id=#{tenantId} AND u.deleted=0
+        GROUP BY t.username ORDER BY count DESC
+    </select>
+
+    <!--
+      A3 沉睡客户（按 owner_user + status 索引筛后，剩余子集 CASE 分桶；
+      用范围比较替代 DATEDIFF：
+        7~13 天：x ∈ [NOW-13d, NOW-6d)
+        14~29 天：x ∈ [NOW-29d, NOW-13d)
+        ≥30 天：x < NOW-29d
+      列函数仍有 COALESCE 影响 CASE 计算速度，但已用 owner_user 索引缩小集合范围
+    -->
+    <select id="staleCustomerByMember" resultType="java.util.Map">
+        SELECT
+            c.owner_user AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE
+                WHEN COALESCE(c.last_follow_time, c.create_time) &gt;= NOW() - INTERVAL 13 DAY
+                 AND COALESCE(c.last_follow_time, c.create_time) &lt;  NOW() - INTERVAL 6 DAY THEN 1 ELSE 0 END) AS count7,
+            SUM(CASE
+                WHEN COALESCE(c.last_follow_time, c.create_time) &gt;= NOW() - INTERVAL 29 DAY
+                 AND COALESCE(c.last_follow_time, c.create_time) &lt;  NOW() - INTERVAL 13 DAY THEN 1 ELSE 0 END) AS count14,
+            SUM(CASE
+                WHEN COALESCE(c.last_follow_time, c.create_time) &lt;  NOW() - INTERVAL 29 DAY THEN 1 ELSE 0 END) AS count30
+        FROM customer_info c
+        LEFT JOIN sys_user u ON u.username=c.owner_user AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE c.tenant_id=#{tenantId} AND c.customer_type=1
+          AND (c.status IS NULL OR c.status NOT IN (3, 4))
+          AND c.owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY c.owner_user
+        HAVING (count7+count14+count30) &gt; 0
+        ORDER BY count30 DESC, count14 DESC
+    </select>
+
+    <select id="staleCustomerSegments" resultType="java.util.Map">
+        SELECT
+            SUM(CASE
+                WHEN COALESCE(last_follow_time, create_time) &gt;= NOW() - INTERVAL 13 DAY
+                 AND COALESCE(last_follow_time, create_time) &lt;  NOW() - INTERVAL 6 DAY THEN 1 ELSE 0 END) AS count7,
+            SUM(CASE
+                WHEN COALESCE(last_follow_time, create_time) &gt;= NOW() - INTERVAL 29 DAY
+                 AND COALESCE(last_follow_time, create_time) &lt;  NOW() - INTERVAL 13 DAY THEN 1 ELSE 0 END) AS count14,
+            SUM(CASE
+                WHEN COALESCE(last_follow_time, create_time) &lt;  NOW() - INTERVAL 29 DAY THEN 1 ELSE 0 END) AS count30
+        FROM customer_info
+        WHERE tenant_id=#{tenantId} AND customer_type=1
+          AND (status IS NULL OR status NOT IN (3, 4))
+          AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+    </select>
+
+    <!-- A1 仅线索：今日待跟进 -->
+    <select id="countTodayPendingLead" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM sale_lead
+        WHERE deleted=0 AND tenant_id=#{tenantId} AND status IN (1,2)
+          AND next_follow_time IS NOT NULL
+          AND next_follow_time &gt;= #{dayStart} AND next_follow_time &lt; #{dayEnd}
+          AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+    </select>
+
+    <!-- A1 仅客户：今日待跟进 -->
+    <select id="countTodayPendingCustomer" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM customer_info
+        WHERE tenant_id=#{tenantId} AND customer_type=1
+          AND (status IS NULL OR status NOT IN (3, 4))
+          AND next_follow_time IS NOT NULL
+          AND next_follow_time &gt;= #{dayStart} AND next_follow_time &lt; #{dayEnd}
+          AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+    </select>
+
+    <!--
+      A1 异常总数（含两类）：全历史数据，不限制时间窗
+        1) 计划时间无效：last 与 next 在同一天
+        2) 未按计划跟进：next > last 且 next < 今日（计划已过期但未真正跟进）
+    -->
+    <select id="countAbnormalSameDay" resultType="java.lang.Long">
+        SELECT
+            (SELECT COUNT(*) FROM sale_lead
+                WHERE deleted=0 AND tenant_id=#{tenantId} AND status IN (1,2)
+                  AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+                  AND last_follow_time IS NOT NULL AND next_follow_time IS NOT NULL
+                  AND next_follow_time &gt;= last_follow_time
+                  AND (
+                       next_follow_time &lt; last_follow_time + INTERVAL 1 DAY
+                       OR next_follow_time &lt; CURDATE()
+                  ))
+          + (SELECT COUNT(*) FROM customer_info
+                WHERE tenant_id=#{tenantId} AND customer_type=1
+                  AND (status IS NULL OR status NOT IN (3, 4))
+                  AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+                  AND last_follow_time IS NOT NULL AND next_follow_time IS NOT NULL
+                  AND next_follow_time &gt;= last_follow_time
+                  AND (
+                       next_follow_time &lt; last_follow_time + INTERVAL 1 DAY
+                       OR next_follow_time &lt; CURDATE()
+                  ))
+    </select>
+
+    <!-- A1 详情：今日待跟进线索列表 -->
+    <select id="listTodayPendingLeads" resultType="java.util.Map">
+        SELECT id, lead_name AS name, contact_name, phone,
+               owner_user, owner_user_name,
+               last_follow_time, next_follow_time, create_time
+        FROM sale_lead
+        WHERE deleted=0 AND tenant_id=#{tenantId} AND status IN (1,2)
+          AND next_follow_time IS NOT NULL
+          AND next_follow_time &gt;= #{dayStart} AND next_follow_time &lt; #{dayEnd}
+          AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        ORDER BY next_follow_time ASC
+        LIMIT 200
+    </select>
+
+    <!-- A1 详情：今日待跟进客户列表 -->
+    <select id="listTodayPendingCustomers" resultType="java.util.Map">
+        SELECT id, customer_name AS name, contact_name, phone,
+               owner_user, owner_user_name,
+               last_follow_time, next_follow_time, create_time
+        FROM customer_info
+        WHERE tenant_id=#{tenantId} AND customer_type=1
+          AND (status IS NULL OR status NOT IN (3, 4))
+          AND next_follow_time IS NOT NULL
+          AND next_follow_time &gt;= #{dayStart} AND next_follow_time &lt; #{dayEnd}
+          AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        ORDER BY next_follow_time ASC
+        LIMIT 200
+    </select>
+
+    <!--
+      A1 异常列表：减半 UNION 数（4→2），用 CASE 切类型；用范围比较利用 next_follow_time 索引
+        - 同日：next ∈ [last, last+1d)
+        - 未按计划：next > last AND next < CURDATE()
+        - 共同前置：last/next 都不为空，next < CURDATE()+1d（即 next 不在未来超过今日）
+        - 用 next_follow_time < last_follow_time + 1d 同时覆盖两种情形
+    -->
+    <select id="listAbnormalRecords" resultType="java.util.Map">
+        SELECT * FROM (
+            SELECT id, lead_name AS name, contact_name, phone,
+                   owner_user, owner_user_name,
+                   last_follow_time, next_follow_time, create_time,
+                   '线索' AS entity_type,
+                   CASE WHEN next_follow_time &lt; last_follow_time + INTERVAL 1 DAY THEN '计划时间无效'
+                        ELSE '未按计划跟进' END AS abnormal_type
+            FROM sale_lead
+            WHERE deleted=0 AND tenant_id=#{tenantId} AND status IN (1,2)
+              AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+              AND last_follow_time IS NOT NULL AND next_follow_time IS NOT NULL
+              AND next_follow_time &gt;= last_follow_time
+              AND (
+                   next_follow_time &lt; last_follow_time + INTERVAL 1 DAY
+                   OR next_follow_time &lt; CURDATE()
+              )
+            UNION ALL
+            SELECT id, customer_name AS name, contact_name, phone,
+                   owner_user, owner_user_name,
+                   last_follow_time, next_follow_time, create_time,
+                   '客户' AS entity_type,
+                   CASE WHEN next_follow_time &lt; last_follow_time + INTERVAL 1 DAY THEN '计划时间无效'
+                        ELSE '未按计划跟进' END AS abnormal_type
+            FROM customer_info
+            WHERE tenant_id=#{tenantId} AND customer_type=1
+              AND (status IS NULL OR status NOT IN (3, 4))
+              AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+              AND last_follow_time IS NOT NULL AND next_follow_time IS NOT NULL
+              AND next_follow_time &gt;= last_follow_time
+              AND (
+                   next_follow_time &lt; last_follow_time + INTERVAL 1 DAY
+                   OR next_follow_time &lt; CURDATE()
+              )
+        ) t
+        ORDER BY abnormal_type, next_follow_time DESC
+    </select>
+
+    <!--
+      A2 即将回收（拆 OR：last_follow_time 有值优先，无值才看 create_time，让单列索引可用）
+      DATEDIFF(NOW(), x) BETWEEN from AND to
+        ⇔ x >= NOW() - to 天 AND x < NOW() - (from-1) 天
+    -->
+    <select id="countAboutRecycleLead" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM sale_lead l
+        WHERE l.deleted=0 AND l.tenant_id=#{tenantId} AND l.status IN (1,2)
+          AND l.owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+          AND (
+            (l.last_follow_time IS NOT NULL
+             AND l.last_follow_time &gt;= NOW() - INTERVAL #{warnToDays} DAY
+             AND l.last_follow_time &lt;  NOW() - INTERVAL (#{warnFromDays} - 1) DAY)
+            OR
+            (l.last_follow_time IS NULL
+             AND l.create_time &gt;= NOW() - INTERVAL #{warnToDays} DAY
+             AND l.create_time &lt;  NOW() - INTERVAL (#{warnFromDays} - 1) DAY)
+          )
+          <!-- 与 LeadAutoInvalidateTask 对齐的硬过滤 ③④⑤⑥⑧⑨ -->
+          <include refid="com.qykj.finmaster.customer.lead.mapper.LeadMapper.leadRecycleHardFiltersDirect"/>
+    </select>
+
+    <select id="countAboutRecycleCustomer" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM customer_info
+        WHERE tenant_id=#{tenantId} AND customer_type=1
+          AND (status IS NULL OR status NOT IN (3, 4))
+          AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+          AND (
+            (last_follow_time IS NOT NULL
+             AND last_follow_time &gt;= NOW() - INTERVAL #{warnToDays} DAY
+             AND last_follow_time &lt;  NOW() - INTERVAL (#{warnFromDays} - 1) DAY)
+            OR
+            (last_follow_time IS NULL
+             AND create_time &gt;= NOW() - INTERVAL #{warnToDays} DAY
+             AND create_time &lt;  NOW() - INTERVAL (#{warnFromDays} - 1) DAY)
+          )
+    </select>
+
+    <!-- A2 详情：即将回收线索 list；OR 拆分让 last_follow_time 索引可用 -->
+    <select id="listAboutRecycleLeads" resultType="java.util.Map">
+        SELECT l.id, l.lead_name AS name, l.contact_name, l.phone,
+               l.owner_user, l.owner_user_name,
+               l.last_follow_time, l.next_follow_time, l.create_time,
+               (#{threshold} - DATEDIFF(NOW(), COALESCE(l.last_follow_time, l.create_time))) AS remain_days
+        FROM sale_lead l
+        WHERE l.deleted=0 AND l.tenant_id=#{tenantId} AND l.status IN (1,2)
+          AND l.owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+          AND (
+            (l.last_follow_time IS NOT NULL
+             AND l.last_follow_time &gt;= NOW() - INTERVAL #{warnToDays} DAY
+             AND l.last_follow_time &lt;  NOW() - INTERVAL (#{warnFromDays} - 1) DAY)
+            OR
+            (l.last_follow_time IS NULL
+             AND l.create_time &gt;= NOW() - INTERVAL #{warnToDays} DAY
+             AND l.create_time &lt;  NOW() - INTERVAL (#{warnFromDays} - 1) DAY)
+          )
+          <!-- 与 LeadAutoInvalidateTask 对齐的硬过滤 ③④⑤⑥⑧⑨ -->
+          <include refid="com.qykj.finmaster.customer.lead.mapper.LeadMapper.leadRecycleHardFiltersDirect"/>
+        ORDER BY remain_days ASC
+        LIMIT 200
+    </select>
+
+    <select id="listAboutRecycleCustomers" resultType="java.util.Map">
+        SELECT id, customer_name AS name, contact_name, phone,
+               owner_user, owner_user_name,
+               last_follow_time, next_follow_time, create_time,
+               (#{threshold} - DATEDIFF(NOW(), COALESCE(last_follow_time, create_time))) AS remain_days
+        FROM customer_info
+        WHERE tenant_id=#{tenantId} AND customer_type=1
+          AND (status IS NULL OR status NOT IN (3, 4))
+          AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+          AND (
+            (last_follow_time IS NOT NULL
+             AND last_follow_time &gt;= NOW() - INTERVAL #{warnToDays} DAY
+             AND last_follow_time &lt;  NOW() - INTERVAL (#{warnFromDays} - 1) DAY)
+            OR
+            (last_follow_time IS NULL
+             AND create_time &gt;= NOW() - INTERVAL #{warnToDays} DAY
+             AND create_time &lt;  NOW() - INTERVAL (#{warnFromDays} - 1) DAY)
+          )
+        ORDER BY remain_days ASC
+        LIMIT 200
+    </select>
+
+    <!-- A9 签单客户数（指定区间，customer 去重） -->
+    <select id="countSignCustomersByPeriod" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT customer_id) FROM orders
+        WHERE status='PAID' AND tenant_id=#{tenantId}
+          AND create_time &gt;= #{start} AND create_time &lt; #{end}
+          AND customer_id IS NOT NULL
+          AND create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+    </select>
+
+    <!-- A9 签单客户按成员：每人 today/week/month 三周期去重客户数 -->
+    <select id="signCustomersByMember" resultType="java.util.Map">
+        SELECT
+            o.create_by AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(DISTINCT CASE WHEN o.create_time &gt;= #{dayStart} AND o.create_time &lt; #{dayEnd} THEN o.customer_id END) AS today,
+            COUNT(DISTINCT CASE WHEN o.create_time &gt;= #{weekStart} AND o.create_time &lt; #{weekEnd} THEN o.customer_id END) AS week,
+            COUNT(DISTINCT CASE WHEN o.create_time &gt;= #{monthStart} AND o.create_time &lt; #{monthEnd} THEN o.customer_id END) AS month
+        FROM orders o
+        LEFT JOIN sys_user u ON u.username=o.create_by AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE o.status='PAID' AND o.tenant_id=#{tenantId}
+          AND o.customer_id IS NOT NULL
+          AND o.create_time &gt;= #{monthStart} AND o.create_time &lt; #{monthEnd}
+          AND o.create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY o.create_by
+        ORDER BY month DESC, week DESC
+    </select>
+
+    <!-- A7 三段漏斗（按 lead.create_time 在区间）：以线索为基准追踪到客户和签单 -->
+    <select id="teamFunnelByLeadTime" resultType="java.util.Map">
+        SELECT
+            COUNT(DISTINCT l.id) AS leads,
+            COUNT(DISTINCT c.id) AS customers,
+            COUNT(DISTINCT CASE WHEN o.id IS NOT NULL THEN c.id END) AS deals
+        FROM sale_lead l
+        LEFT JOIN customer_info c ON c.lead_id = l.id AND c.tenant_id=#{tenantId} AND c.customer_type=1
+        LEFT JOIN orders o ON o.customer_id = c.id AND o.tenant_id=#{tenantId} AND o.status='PAID'
+        WHERE l.deleted=0 AND l.tenant_id=#{tenantId}
+          AND l.create_time &gt;= #{start} AND l.create_time &lt; #{end}
+          AND l.owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+    </select>
+
+    <!-- 按 usernames 查 sys_user 全部成员（员工诊断画像下拉用）-->
+    <select id="listMembersByUsernames" resultType="java.util.Map">
+        SELECT username, real_name
+        FROM sys_user
+        WHERE deleted = 0
+          AND tenant_id = #{tenantId}
+          AND username IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        ORDER BY real_name, username
+    </select>
+
+    <!-- A7 漏斗按成员明细：每人在指定区间的 leads/customers/deals + 转化率 -->
+    <select id="teamFunnelByMember" resultType="java.util.Map">
+        SELECT
+            l.owner_user AS username,
+            MAX(usr.real_name) AS real_name,
+            COUNT(DISTINCT l.id) AS leads,
+            COUNT(DISTINCT c.id) AS customers,
+            COUNT(DISTINCT CASE WHEN o.id IS NOT NULL THEN c.id END) AS deals
+        FROM sale_lead l
+        LEFT JOIN customer_info c ON c.lead_id = l.id AND c.tenant_id=#{tenantId} AND c.customer_type=1
+        LEFT JOIN orders o ON o.customer_id = c.id AND o.tenant_id=#{tenantId} AND o.status='PAID'
+        LEFT JOIN sys_user usr ON usr.username = l.owner_user AND usr.tenant_id=#{tenantId} AND usr.deleted=0
+        WHERE l.deleted=0 AND l.tenant_id=#{tenantId}
+          AND l.create_time &gt;= #{start} AND l.create_time &lt; #{end}
+          AND l.owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY l.owner_user
+        ORDER BY leads DESC, deals DESC
+    </select>
+
+    <!-- A4 每人今日动作（跟进数=今日有 last_follow_time 更新的 lead+customer，订单数=今日 PAID by create_by） -->
+    <select id="memberDailyAction" resultType="java.util.Map">
+        SELECT
+            usr.username AS username,
+            usr.real_name AS real_name,
+            COALESCE(f.cnt,0) AS today_follow_count,
+            COALESCE(o.cnt,0) AS today_order_count,
+            0 AS today_call_count
+        FROM sys_user usr
+        LEFT JOIN (
+            SELECT owner_user AS username, COUNT(*) AS cnt FROM sale_lead
+            WHERE deleted=0 AND tenant_id=#{tenantId}
+              AND last_follow_time &gt;= #{dayStart} AND last_follow_time &lt; #{dayEnd}
+              AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            GROUP BY owner_user
+            UNION ALL
+            SELECT owner_user AS username, COUNT(*) AS cnt FROM customer_info
+            WHERE tenant_id=#{tenantId} AND customer_type=1
+              AND last_follow_time &gt;= #{dayStart} AND last_follow_time &lt; #{dayEnd}
+              AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            GROUP BY owner_user
+        ) f ON f.username=usr.username
+        LEFT JOIN (
+            SELECT create_by AS username, COUNT(*) AS cnt FROM orders
+            WHERE status='PAID' AND tenant_id=#{tenantId}
+              AND create_time &gt;= #{dayStart} AND create_time &lt; #{dayEnd}
+              AND create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+            GROUP BY create_by
+        ) o ON o.username=usr.username
+        WHERE usr.tenant_id=#{tenantId} AND usr.deleted=0
+          AND usr.username IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        ORDER BY (COALESCE(f.cnt,0)+COALESCE(o.cnt,0)) ASC
+    </select>
+
+    <!-- A5 在途订单聚合 -->
+    <select id="pendingOrderAgg" resultType="java.util.Map">
+        SELECT
+            COALESCE(SUM(final_amount), 0) AS amount,
+            COUNT(*) AS count
+        FROM orders WHERE status='PENDING' AND tenant_id=#{tenantId}
+          AND create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+    </select>
+
+    <select id="pendingOrderByMember" resultType="java.util.Map">
+        SELECT
+            o.create_by AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(*) AS order_count,
+            COALESCE(SUM(o.final_amount),0) AS amount,
+            ROUND(AVG(DATEDIFF(NOW(), o.create_time)), 1) AS avg_age_days
+        FROM orders o
+        LEFT JOIN sys_user u ON u.username=o.create_by AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE o.status='PENDING' AND o.tenant_id=#{tenantId}
+          AND o.create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY o.create_by ORDER BY amount DESC
+    </select>
+
+    <!-- A6 退款聚合 -->
+    <select id="refundAgg" resultType="java.util.Map">
+        SELECT
+            COALESCE(SUM(final_amount),0) AS amount,
+            COUNT(*) AS count
+        FROM orders WHERE status IN ('REFUNDED','REFUNDING') AND tenant_id=#{tenantId}
+          AND update_time &gt;= #{start} AND update_time &lt; #{end}
+          AND create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+    </select>
+
+    <select id="refundByMember" resultType="java.util.Map">
+        SELECT
+            o.create_by AS username,
+            MAX(u.real_name) AS real_name,
+            SUM(CASE WHEN o.status IN ('REFUNDED','REFUNDING') THEN 1 ELSE 0 END) AS refund_count,
+            COALESCE(SUM(CASE WHEN o.status IN ('REFUNDED','REFUNDING') THEN o.final_amount ELSE 0 END),0) AS refund_amount,
+            ROUND(SUM(CASE WHEN o.status IN ('REFUNDED','REFUNDING') THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS refund_rate
+        FROM orders o
+        LEFT JOIN sys_user u ON u.username=o.create_by AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE o.tenant_id=#{tenantId}
+          AND o.create_time &gt;= #{start} AND o.create_time &lt; #{end}
+          AND o.create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY o.create_by
+        HAVING refund_count &gt; 0
+        ORDER BY refund_amount DESC
+    </select>
+
+    <!-- A8 跟进频次直方图：CASE 用范围比较替代 DATEDIFF -->
+    <select id="followFrequencyHistogram" resultType="java.util.Map">
+        SELECT bucket AS label, SUM(cnt) AS count FROM (
+          SELECT
+            CASE
+              WHEN COALESCE(last_follow_time, create_time) &gt;= CURDATE() THEN '今日'
+              WHEN COALESCE(last_follow_time, create_time) &gt;= NOW() - INTERVAL 3 DAY THEN '1-3 天'
+              WHEN COALESCE(last_follow_time, create_time) &gt;= NOW() - INTERVAL 7 DAY THEN '4-7 天'
+              WHEN COALESCE(last_follow_time, create_time) &gt;= NOW() - INTERVAL 14 DAY THEN '8-14 天'
+              WHEN COALESCE(last_follow_time, create_time) &gt;= NOW() - INTERVAL 30 DAY THEN '15-30 天'
+              ELSE '30 天以上'
+            END AS bucket,
+            COUNT(*) AS cnt
+          FROM customer_info
+          WHERE tenant_id=#{tenantId} AND customer_type=1
+            AND (status IS NULL OR status NOT IN (3, 4))
+            AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+          GROUP BY bucket
+        ) t GROUP BY bucket
+        ORDER BY FIELD(bucket,'今日','1-3 天','4-7 天','8-14 天','15-30 天','30 天以上')
+    </select>
+
+    <!-- B1 业绩排行 -->
+    <select id="performanceRanking" resultType="java.util.Map">
+        SELECT
+            o.create_by AS username,
+            MAX(u.real_name) AS real_name,
+            COUNT(*) AS order_count,
+            COALESCE(SUM(o.final_amount),0) AS order_amount
+        FROM orders o
+        LEFT JOIN sys_user u ON u.username=o.create_by AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE o.status='PAID' AND o.tenant_id=#{tenantId}
+          AND o.create_time &gt;= #{start} AND o.create_time &lt; #{end}
+          AND o.create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY o.create_by
+        ORDER BY order_amount DESC
+        LIMIT #{limit}
+    </select>
+
+    <!-- B2 6 月业绩走势（团队总）+ 签单数 -->
+    <select id="teamMonthlyAmount" resultType="java.util.Map">
+        SELECT DATE_FORMAT(create_time, '%Y-%m') AS month,
+               COALESCE(SUM(final_amount),0) AS amount,
+               COUNT(*) AS order_count
+        FROM orders
+        WHERE status='PAID' AND tenant_id=#{tenantId}
+          AND create_time &gt;= #{start} AND create_time &lt; #{end}
+          AND create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY month ORDER BY month
+    </select>
+
+    <!-- B2 6 月业绩走势（按成员） + 签单数 -->
+    <select id="memberMonthlyAmount" resultType="java.util.Map">
+        SELECT
+            o.create_by AS username,
+            MAX(u.real_name) AS real_name,
+            DATE_FORMAT(o.create_time,'%Y-%m') AS month,
+            COALESCE(SUM(o.final_amount),0) AS amount,
+            COUNT(*) AS order_count
+        FROM orders o
+        LEFT JOIN sys_user u ON u.username=o.create_by AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE o.status='PAID' AND o.tenant_id=#{tenantId}
+          AND o.create_time &gt;= #{start} AND o.create_time &lt; #{end}
+          AND o.create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY o.create_by, month ORDER BY o.create_by, month
+    </select>
+
+    <!-- B3 本月 vs 上月每人对比 -->
+    <select id="memberAmountCompare" resultType="java.util.Map">
+        SELECT t.username,
+               MAX(u.real_name) AS real_name,
+               SUM(t.curr_amount) AS curr_amount,
+               SUM(t.prev_amount) AS prev_amount,
+               SUM(t.curr_count) AS curr_count,
+               SUM(t.prev_count) AS prev_count
+        FROM (
+          SELECT create_by AS username,
+                 SUM(CASE WHEN create_time &gt;= #{currStart} AND create_time &lt; #{currEnd} THEN final_amount ELSE 0 END) AS curr_amount,
+                 SUM(CASE WHEN create_time &gt;= #{prevStart} AND create_time &lt; #{prevEnd} THEN final_amount ELSE 0 END) AS prev_amount,
+                 SUM(CASE WHEN create_time &gt;= #{currStart} AND create_time &lt; #{currEnd} THEN 1 ELSE 0 END) AS curr_count,
+                 SUM(CASE WHEN create_time &gt;= #{prevStart} AND create_time &lt; #{prevEnd} THEN 1 ELSE 0 END) AS prev_count
+          FROM orders
+          WHERE status='PAID' AND tenant_id=#{tenantId}
+            AND create_time &gt;= #{prevStart} AND create_time &lt; #{currEnd}
+            AND create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+          GROUP BY create_by
+        ) t
+        LEFT JOIN sys_user u ON u.username=t.username AND u.tenant_id=#{tenantId} AND u.deleted=0
+        GROUP BY t.username
+    </select>
+
+    <!-- B4 团队漏斗 -->
+    <select id="teamFunnel" resultType="java.util.Map">
+        SELECT
+        (SELECT COUNT(*) FROM sale_lead WHERE deleted=0 AND tenant_id=#{tenantId}
+            AND create_time &gt;= #{start} AND create_time &lt; #{end}
+            AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>) AS leads,
+        (SELECT COUNT(*) FROM customer_info WHERE tenant_id=#{tenantId} AND customer_type=1
+            AND create_time &gt;= #{start} AND create_time &lt; #{end}
+            AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>) AS customers,
+        (SELECT COUNT(DISTINCT customer_id) FROM orders WHERE status='PAID' AND tenant_id=#{tenantId}
+            AND create_time &gt;= #{start} AND create_time &lt; #{end}
+            AND create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>) AS deals
+    </select>
+
+    <!-- B5 业绩金额（已有 sumMyMonthAmount 在 SalesWorkbenchMapper，复用即可，这里补 leader 视角通用） -->
+    <select id="teamSignAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(final_amount),0) FROM orders
+        WHERE status='PAID' AND tenant_id=#{tenantId}
+          AND create_time &gt;= #{start} AND create_time &lt; #{end}
+          AND create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+    </select>
+
+    <!-- B5 签单数（PAID 订单数）-->
+    <select id="teamSignOrderCount" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM orders
+        WHERE status='PAID' AND tenant_id=#{tenantId}
+          AND create_time &gt;= #{start} AND create_time &lt; #{end}
+          AND create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+    </select>
+
+    <!-- B6 客单价聚合 -->
+    <select id="teamAvgOrder" resultType="java.util.Map">
+        SELECT
+            COALESCE(AVG(final_amount), 0) AS avg_amount,
+            COUNT(*) AS order_count
+        FROM orders WHERE status='PAID' AND tenant_id=#{tenantId}
+          AND create_time &gt;= #{start} AND create_time &lt; #{end}
+          AND create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+    </select>
+
+    <select id="memberAvgOrder" resultType="java.util.Map">
+        SELECT
+            o.create_by AS username,
+            MAX(u.real_name) AS real_name,
+            COALESCE(AVG(o.final_amount),0) AS avg_amount,
+            COUNT(*) AS order_count
+        FROM orders o
+        LEFT JOIN sys_user u ON u.username=o.create_by AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE o.status='PAID' AND o.tenant_id=#{tenantId}
+          AND o.create_time &gt;= #{start} AND o.create_time &lt; #{end}
+          AND o.create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY o.create_by ORDER BY avg_amount DESC
+    </select>
+
+    <!-- B7 业绩构成（按业务名称）：金额 + 订单数（distinct order_id 去重，避免明细行重复计数）-->
+    <select id="performanceCompositionByBusiness" resultType="java.util.Map">
+        SELECT
+            COALESCE(b.business_name, '其他') AS name,
+            COALESCE(SUM(od.amount),0) AS value,
+            COUNT(DISTINCT o.id) AS count
+        FROM orders o
+        JOIN order_details od ON od.order_id=o.id AND od.tenant_id=#{tenantId}
+        LEFT JOIN sys_business b ON b.id=od.business_id AND b.deleted=0
+        WHERE o.status='PAID' AND o.tenant_id=#{tenantId}
+          AND o.create_time &gt;= #{start} AND o.create_time &lt; #{end}
+          AND o.create_by IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY b.business_name
+        ORDER BY value DESC
+    </select>
+
+    <!-- B8 来源转化率 -->
+    <select id="sourceConversion" resultType="java.util.Map">
+        SELECT
+            COALESCE(source, '未知') AS source,
+            COUNT(*) AS leads,
+            SUM(CASE WHEN status=3 THEN 1 ELSE 0 END) AS converted,
+            ROUND(SUM(CASE WHEN status=3 THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0), 2) AS rate
+        FROM sale_lead
+        WHERE deleted=0 AND tenant_id=#{tenantId}
+          AND create_time &gt;= #{start} AND create_time &lt; #{end}
+          AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+        GROUP BY source ORDER BY rate DESC
+    </select>
+
+    <select id="sourceTopConverter" resultType="java.util.Map">
+        SELECT t.source AS source, t.username AS username, MAX(u.real_name) AS top_member_name, t.converted AS converted
+        FROM (
+          SELECT
+              COALESCE(source,'未知') AS source,
+              owner_user AS username,
+              SUM(CASE WHEN status=3 THEN 1 ELSE 0 END) AS converted,
+              ROW_NUMBER() OVER (PARTITION BY COALESCE(source,'未知') ORDER BY SUM(CASE WHEN status=3 THEN 1 ELSE 0 END) DESC) AS rn
+          FROM sale_lead
+          WHERE deleted=0 AND tenant_id=#{tenantId}
+            AND create_time &gt;= #{start} AND create_time &lt; #{end}
+            AND owner_user IN <foreach collection="usernames" item="u" open="(" separator="," close=")">#{u}</foreach>
+          GROUP BY source, owner_user
+        ) t
+        LEFT JOIN sys_user u ON u.username=t.username AND u.tenant_id=#{tenantId} AND u.deleted=0
+        WHERE t.rn=1
+        GROUP BY t.source, t.username, t.converted
+    </select>
+
+    <!-- ===== 诊断画像 ===== -->
+
+    <select id="memberMonthlyAmountSelf" resultType="java.util.Map">
+        SELECT DATE_FORMAT(create_time,'%Y-%m') AS month,
+               COALESCE(SUM(final_amount),0) AS amount
+        FROM orders WHERE status='PAID' AND tenant_id=#{tenantId}
+          AND create_by=#{username}
+          AND create_time &gt;= #{start} AND create_time &lt; #{end}
+        GROUP BY month ORDER BY month
+    </select>
+
+    <!--
+      个人漏斗：按线索追溯口径（与团队漏斗 teamFunnelByLeadTime 一致）
+      以 sale_lead.create_time 在区间为基准，LEFT JOIN customer_info.lead_id 追到客户，
+      再 LEFT JOIN orders.customer_id 追到 PAID 订单。三段同一批线索串起来。
+    -->
+    <select id="memberFunnel" resultType="java.util.Map">
+        SELECT
+            COUNT(DISTINCT l.id) AS leads,
+            COUNT(DISTINCT c.id) AS customers,
+            COUNT(DISTINCT CASE WHEN o.id IS NOT NULL THEN c.id END) AS deals
+        FROM sale_lead l
+        LEFT JOIN customer_info c ON c.lead_id = l.id AND c.tenant_id=#{tenantId} AND c.customer_type=1
+        LEFT JOIN orders o ON o.customer_id = c.id AND o.tenant_id=#{tenantId} AND o.status='PAID'
+        WHERE l.deleted=0 AND l.tenant_id=#{tenantId}
+          AND l.owner_user=#{username}
+          AND l.create_time &gt;= #{start} AND l.create_time &lt; #{end}
+    </select>
+
+    <select id="memberDailyActionSelf" resultType="java.util.Map">
+        SELECT day, SUM(cnt) AS count FROM (
+          SELECT DATE(last_follow_time) AS day, COUNT(*) AS cnt FROM sale_lead
+          WHERE deleted=0 AND tenant_id=#{tenantId} AND owner_user=#{username}
+            AND last_follow_time &gt;= #{from}
+          GROUP BY DATE(last_follow_time)
+          UNION ALL
+          SELECT DATE(last_follow_time) AS day, COUNT(*) AS cnt FROM customer_info
+          WHERE tenant_id=#{tenantId} AND customer_type=1 AND owner_user=#{username}
+            AND last_follow_time &gt;= #{from}
+          GROUP BY DATE(last_follow_time)
+        ) t
+        WHERE day IS NOT NULL
+        GROUP BY day ORDER BY day
+    </select>
+
+    <select id="memberRecycleStaleSelf" resultType="java.util.Map">
+        SELECT
+        (SELECT COUNT(*) FROM sale_lead l WHERE l.deleted=0 AND l.tenant_id=#{tenantId} AND l.status IN (1,2)
+            AND l.owner_user=#{username}
+            AND (
+              (l.last_follow_time IS NOT NULL
+               AND l.last_follow_time &gt;= NOW() - INTERVAL #{leadTo} DAY
+               AND l.last_follow_time &lt;  NOW() - INTERVAL (#{leadFrom} - 1) DAY)
+              OR
+              (l.last_follow_time IS NULL
+               AND l.create_time &gt;= NOW() - INTERVAL #{leadTo} DAY
+               AND l.create_time &lt;  NOW() - INTERVAL (#{leadFrom} - 1) DAY)
+            )
+            <!-- 与 LeadAutoInvalidateTask 对齐的硬过滤 ③④⑤⑥⑧⑨ -->
+            <include refid="com.qykj.finmaster.customer.lead.mapper.LeadMapper.leadRecycleHardFiltersDirect"/>
+        )
+        +
+        (SELECT COUNT(*) FROM customer_info WHERE tenant_id=#{tenantId} AND customer_type=1
+            AND owner_user=#{username}
+            AND (status IS NULL OR status NOT IN (3, 4))
+            AND (
+              (last_follow_time IS NOT NULL
+               AND last_follow_time &gt;= NOW() - INTERVAL #{custTo} DAY
+               AND last_follow_time &lt;  NOW() - INTERVAL (#{custFrom} - 1) DAY)
+              OR
+              (last_follow_time IS NULL
+               AND create_time &gt;= NOW() - INTERVAL #{custTo} DAY
+               AND create_time &lt;  NOW() - INTERVAL (#{custFrom} - 1) DAY)
+            ))
+        AS about_recycle_count,
+        (SELECT COUNT(*) FROM customer_info WHERE tenant_id=#{tenantId} AND customer_type=1
+            AND owner_user=#{username}
+            AND (status IS NULL OR status NOT IN (3, 4))
+            AND (
+              (last_follow_time IS NOT NULL AND last_follow_time &lt; NOW() - INTERVAL 7 DAY)
+              OR
+              (last_follow_time IS NULL AND create_time &lt; NOW() - INTERVAL 7 DAY)
+            )) AS stale_count
+    </select>
+
+</mapper>
