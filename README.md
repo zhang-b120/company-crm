@@ -154,4 +154,4 @@ third:
 
 文件域名在 `FileConstants.BASE_URL`。换机器部署时要同时改磁盘路径，并保证目录存在。
 
-不要把 Secret、私钥、数据库密码写进新的提交。GitHub Push Protection 会拦截腾讯云 Secret ID 这类明文密钥。
+
