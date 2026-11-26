@@ -1,4 +1,4 @@
-# 青亿 CRM（finmaster）
+#  CRM（finmaster）
 
 公司内部 CRM 后端。当前仓库只有一个 Spring Boot 服务 `finmaster-server`，没有前端工程。
 
@@ -22,13 +22,13 @@
 mvn spring-boot:run
 ```
 
-或在 IDE 中运行 `com.qykj.finmaster.FinMasterApplication`。
+或在 IDE 中运行 `com..finmaster.FinMasterApplication`。
 
 启动前先准备 MySQL，并按下面「环境与密钥」填好本机配置。Flyway 已开启，脚本目录是 `classpath:db/migration`，基线版本 `2.0.18`。仓库里现有建表脚本在 `src/main/resources/script/ddl.sql`、`dml.sql`，不在 Flyway 目录下。
 
 ## 项目结构
 
-源码目录是 `com/api/finmaster`，Java 包名是 `com.qykj.finmaster`。新建类时包名跟现有类保持一致。
+源码目录是 `com/api/finmaster`，Java 包名是 `com..finmaster`。新建类时包名跟现有类保持一致。
 
 ```text
 company-crm/
@@ -36,7 +36,7 @@ company-crm/
 └── finmaster-server/
     ├── pom.xml
     └── src/main/
-        ├── java/com/api/finmaster/     # 包名 com.qykj.finmaster
+        ├── java/com/api/finmaster/     # 包名 com..finmaster
         │   ├── FinMasterApplication.java
         │   ├── analytics/              # 经营分析（线索、客户、订单、外勤、客服、OA）
         │   ├── chatbot/                # 通话质检对话（DeepSeek）
@@ -140,9 +140,7 @@ third:
 
 对应环境变量：`THIRD_TENCENT_ASR_SECRET_ID`、`THIRD_TENCENT_ASR_SECRET_KEY`。
 
-### 3. 仍写在代码或 properties 里的密钥
-
-这些还没有接到 `application.yml`，换环境要改源码或对应文件。
+### 3. 
 
 | 用途 | 位置 |
 | --- | --- |
@@ -152,7 +150,7 @@ third:
 | 企业微信 corpId、应用 secret、会话存档密钥和私钥、回调 Token / AESKey | `common/core/domain/constansts/WxConstants.java` |
 | 接口签名 RSA 私钥、公钥、MD5 key | `src/main/resources/config.properties` |
 | 微信支付商户号、证书路径、APIv3 密钥 | 数据库支付配置表，由 `config/PaymentConfiguration.java` 启动时加载 |
-| 上传文件磁盘路径 | `common/core/domain/constansts/FileConstants.java`，当前是 `E:\qykj\file\...` |
+| 上传文件磁盘路径 | `common/core/domain/constansts/FileConstants.java`，当前是 `E:\\file\...` |
 
 文件域名在 `FileConstants.BASE_URL`。换机器部署时要同时改磁盘路径，并保证目录存在。
 
